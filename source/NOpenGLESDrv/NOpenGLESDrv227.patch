@@ -1,0 +1,2562 @@
+NOpenGLESDrv for OldUnreal 227k_15 (Unreal Gold PortMaster port).
+
+Applies to Andiweli/UT99-Android 85b1a9ada6ae28c422570d4603e57e4e4cef6eb1
+(git apply, from the repository root). Contains ports/ut99's
+NOpenGLESDrv469.patch, the 227 port behind NOPENGLES_227, and fixes shared
+by both OldUnreal builds (NOPENGLES_OLDUNREAL; the 469e build still
+compiles with NOPENGLES_469_COMPAT). Every change carries a comment;
+BUILD.md lists them.
+
+diff --git a/third_party/ut99dc/Source/NOpenGLESDrv/CMakeLists.txt b/third_party/ut99dc/Source/NOpenGLESDrv/CMakeLists.txt
+index 7c7d7ca..aa923f3 100644
+--- a/third_party/ut99dc/Source/NOpenGLESDrv/CMakeLists.txt
++++ b/third_party/ut99dc/Source/NOpenGLESDrv/CMakeLists.txt
+@@ -10,6 +10,10 @@ if(ANDROID)
+   set(SRC_FILES "NOpenGLESDrv.cpp" "${ANDROID_GLAD_COMPAT_DIR}/glad.c")
+   set(NOPENGLES_GLAD_INCLUDE_DIRS "${ANDROID_GLAD_COMPAT_DIR}")
+   set(NOPENGLES_GLM_INCLUDE_DIRS "${ANDROID_GLM_COMPAT_DIR}")
++elseif(DEFINED NOPENGLES_COMPAT_DIR)
++  set(SRC_FILES "NOpenGLESDrv.cpp" "${NOPENGLES_COMPAT_DIR}/android_glad_compat/glad.c")
++  set(NOPENGLES_GLAD_INCLUDE_DIRS "${NOPENGLES_COMPAT_DIR}/android_glad_compat")
++  set(NOPENGLES_GLM_INCLUDE_DIRS "${NOPENGLES_COMPAT_DIR}/android_glm_compat")
+ else()
+   set(SRC_FILES "NOpenGLESDrv.cpp" "${CMAKE_SOURCE_DIR}/../Thirdparty/glad_es/glad.c")
+   set(NOPENGLES_GLAD_INCLUDE_DIRS
+diff --git a/third_party/ut99dc/Source/NOpenGLESDrv/FragmentShader.glsl.inc b/third_party/ut99dc/Source/NOpenGLESDrv/FragmentShader.glsl.inc
+index 36959d5..0529484 100644
+--- a/third_party/ut99dc/Source/NOpenGLESDrv/FragmentShader.glsl.inc
++++ b/third_party/ut99dc/Source/NOpenGLESDrv/FragmentShader.glsl.inc
+@@ -1,17 +1,23 @@
+ R""(
+ 
+-varying mediump vec3 vPosition;
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++#define UT99_WORLD_PRECISION highp
++#else
++#define UT99_WORLD_PRECISION mediump
++#endif
++
++varying UT99_WORLD_PRECISION vec3 vPosition;
+ #ifdef SF_Texture0
+-varying mediump vec2 vTexCoord0;
++varying UT99_WORLD_PRECISION vec2 vTexCoord0;
+ #endif
+ #ifdef SF_Texture1
+-varying mediump vec2 vTexCoord1;
++varying UT99_WORLD_PRECISION vec2 vTexCoord1;
+ #endif
+ #ifdef SF_Texture2
+-varying mediump vec2 vTexCoord2;
++varying UT99_WORLD_PRECISION vec2 vTexCoord2;
+ #endif
+ #ifdef SF_Texture3
+-varying mediump vec2 vTexCoord3;
++varying UT99_WORLD_PRECISION vec2 vTexCoord3;
+ #endif
+ #ifdef SF_VtxColor
+ varying lowp vec4 vVtxColor;
+@@ -20,7 +26,44 @@ varying lowp vec4 vVtxColor;
+ varying lowp vec4 vVtxFog;
+ #endif
+ 
++#ifdef NOPENGLES_TONE
++// 227: textures, light/fog maps and colours arrive with the tone curve's
++// power applied (UNOpenGLESRenderDevice::UpdateTone). X: final colour scale,
++// Y: light map scale (2*overbright)^gamma, Z: 2^gamma for the fog maps and
++// detail textures, which are stored at half intensity, W: 2 - 2^gamma.
++uniform mediump vec4 uToneScale;
++#define LIGHTMAP_SCALE uToneScale.y
++#define HALF_SCALE uToneScale.z
++#ifdef SF_ToneBoost
++// Brightness above 0.5: the final scale is uToneScale.x + t * X + t^2 * Y,
++// t being the brightest channel (OpenGLDrv's brightness boost).
++uniform mediump vec2 uToneBoost;
++#endif
++// Fog adds F to the attenuated colour C, and the tone power of the sum is
++// wanted from the powers of both: C^g + F^g - (2 - 2^g) * min(C^g, F^g)
++// is exact when either is zero or both are equal, and at most 5% too
++// bright in between at g = 0.8 (the plain sum would be up to 13% too bright).
++#define FOG_ADD(C, F) ((C) + (F) - uToneScale.w * min((C), (F)))
++#else
+ uniform lowp float uBrightness;
++#ifndef LIGHTMAP_OVERBRIGHT
++#define LIGHTMAP_OVERBRIGHT 1.0
++#endif
++#define LIGHTMAP_SCALE (2.0 * LIGHTMAP_OVERBRIGHT)
++#define HALF_SCALE 2.0
++#endif
++
++#ifdef SF_DistanceFog
++// 227 zone distance fog: colour, and X/Y scale/bias of the eye depth with
++// the formula in Z (0 linear, 1 exponential, 2 exponential squared).
++uniform lowp vec4 uDistanceFogColor;
++uniform UT99_WORLD_PRECISION vec4 uDistanceFogParams;
++#ifdef NOPENGLES_TONE
++// x^gamma for x in [0,1] as a polynomial (UpdateTone), no pow.
++uniform mediump vec3 uTonePow;
++#define TONE_POW(X) ((X) + (X) * (1.0 - (X)) * (uTonePow.x + (X) * (uTonePow.y + (X) * uTonePow.z)))
++#endif
++#endif
+ 
+ #ifdef SF_Texture0
+ uniform sampler2D uTexture0;
+@@ -35,10 +78,6 @@ uniform sampler2D uTexture2;
+ uniform sampler2D uTexture3;
+ #endif
+ 
+-#ifndef LIGHTMAP_OVERBRIGHT
+-#define LIGHTMAP_OVERBRIGHT 1.0
+-#endif
+-
+ void main()
+ {
+ 	lowp vec4 Out = vec4(1.0);
+@@ -51,6 +90,10 @@ void main()
+ #ifdef SF_AlphaTest
+ 	if( Out.a < 0.5 )
+ 		discard;
++	// Transparent texels are black (palette index 0, BC1 punch-through), so
++	// filtering darkens the colour along cut-out edges; undo that as
++	// XOpenGLDrv does.
++	Out.rgb /= Out.a;
+ #endif
+ 
+ #ifdef SF_ModulatedDecalMask
+@@ -66,7 +109,7 @@ void main()
+ #ifdef SF_Texture1
+ 	lowp vec4 Texel1 = texture2D(uTexture1, vTexCoord1);
+ #ifdef SF_Lightmap
+-	Out.rgb *= Texel1.rgb * 2.0 * LIGHTMAP_OVERBRIGHT;
++	Out.rgb *= Texel1.rgb * LIGHTMAP_SCALE;
+ #else
+ 	Out *= Texel1;
+ #endif
+@@ -75,8 +118,13 @@ void main()
+ #ifdef SF_Texture2
+ 	lowp vec4 Texel2 = texture2D(uTexture2, vTexCoord2);
+ #ifdef SF_Fogmap
++#ifdef NOPENGLES_TONE
++	// The fog map alpha already holds 1 - (1 - 2a)^gamma.
++	Out.rgb = FOG_ADD( Out.rgb * (1.0 - Texel2.a), Texel2.rgb * HALF_SCALE );
++#else
+ 	Texel2 *= 2.0;
+ 	Out.rgb = Texel2.rgb + Out.rgb * (1.0 - Texel2.a);
++#endif
+ 	Out.a = Texel2.a;
+ #else
+ 	Out *= Texel2;
+@@ -84,7 +132,7 @@ void main()
+ #endif
+ 
+ #ifdef SF_Texture3
+-	lowp vec4 Texel3 = texture2D(uTexture3, vTexCoord3) * 2.0;
++	lowp vec4 Texel3 = texture2D(uTexture3, vTexCoord3) * HALF_SCALE;
+ #ifdef SF_Detail
+ 	// TODO: XOpenGLDrv does some RGB->HSV->RGB magic on detail maps, we just * 2 instead
+ 	lowp float DetailScale = clamp(0.65 - vPosition.z / 380.0, 0.0, 1.0);
+@@ -100,10 +148,44 @@ void main()
+ #endif
+ 
+ #ifdef SF_VtxFog
++#ifdef NOPENGLES_TONE
++	Out.rgb = FOG_ADD( Out.rgb * (1.0 - vVtxFog.a), vVtxFog.rgb );
++#else
+ 	Out.rgb = vVtxFog.rgb + Out.rgb * (1.0 - vVtxFog.a);
+ #endif
++#endif
+ 
++#ifdef SF_DistanceFog
++	UT99_WORLD_PRECISION float FogT = vPosition.z * uDistanceFogParams.x + uDistanceFogParams.y;
++	UT99_WORLD_PRECISION float FogAmount = FogT;
++	if( uDistanceFogParams.z > 1.5 )
++		FogAmount = 1.0 - exp( -FogT * FogT );
++	else if( uDistanceFogParams.z > 0.5 )
++		FogAmount = 1.0 - exp( -FogT );
++#ifdef NOPENGLES_TONE
++	// The tone power of C * (1 - a) + F * a from C^g and F^g: each term with
++	// its exact weight, (1 - a)^g and a^g, then added like fog. Exact for
++	// black fog, on black and where C = F; a plain mix of the powers left a
++	// room in grey fog 9% too dark (tests/tone_compare.py, scene dfog).
++	mediump float FogA = clamp( FogAmount, 0.0, 1.0 ) * uDistanceFogColor.a;
++	Out.rgb = FOG_ADD( Out.rgb * TONE_POW( 1.0 - FogA ), uDistanceFogColor.rgb * TONE_POW( FogA ) );
++#else
++	Out.rgb = mix( Out.rgb, uDistanceFogColor.rgb, clamp( FogAmount, 0.0, 1.0 ) * uDistanceFogColor.a );
++#endif
++#endif
++
++#ifdef NOPENGLES_TONE
++	// Clamped first, as OpenGLDrv's 8-bit framebuffer is before its brightness.
++	Out.rgb = min( Out.rgb, vec3(1.0) );
++#ifdef SF_ToneBoost
++	mediump float ToneMax = max( max( Out.r, Out.g ), Out.b );
++	Out.rgb *= uToneScale.x + ToneMax * ( uToneBoost.x + ToneMax * uToneBoost.y );
++#else
++	Out.rgb *= uToneScale.x;
++#endif
++#else
+ 	Out.rgb *= 0.5 + uBrightness;
++#endif
+ 
+ 	gl_FragColor = Out;
+ }
+diff --git a/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrv.cpp b/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrv.cpp
+index d2dc871..8168209 100644
+--- a/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrv.cpp
++++ b/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrv.cpp
+@@ -1,12 +1,36 @@
+ /* UT99_ANDROID_V61_NATIVE_GLES_VIEWPORT removes old 960x540 logical viewport mutation */
++#ifdef NOPENGLES_227
++// OldUnreal 227 is SDL3 only.
++#include <SDL3/SDL.h>
++#else
+ #include "SDL2/SDL.h"
++#endif
+ #include "glad.h"
+ #include "glm/matrix.hpp"
+ #include "glm/ext/matrix_clip_space.hpp"
++#ifndef NOPENGLES_227
+ #include "SDL.h"
++#endif
+ 
+ #include "NOpenGLESDrvPrivate.h"
+ 
++#ifdef NOPENGLES_469_COMPAT
++#include <cstdlib>
++#include <cstdio>
++#include <string>
++#include "SDLDrv.h"
++#undef DLL_EXPORT
++#define DLL_EXPORT extern "C"
++#endif
++
++#ifdef NOPENGLES_227
++#include <cstdio>
++#include <string>
++// BC1/BC2/BC3 to RGBA8 decoder shared with the port's OpenGLDrv build
++// (ports/unrealgold/source/common); Mali-G31 has no S3TC.
++#include "BCDecode.h"
++#endif
++
+ #ifdef PLATFORM_ANDROID
+ #include <android/log.h>
+ #define UT99_ANDROID_GLES_FORCEFULL_V28 1
+@@ -69,15 +93,181 @@ static constexpr DWORD AttribSizes[AT_Count] = {
+ // FColor is adjusted for endianness
+ #define ALPHA_MASK 0xff000000
+ 
++#ifdef NOPENGLES_227
++// Light and fog maps (TEXF_BGRA8_LM, 7 bits per channel).
++static inline UBOOL IsLightOrFogMap( const FTextureInfo& Info )
++{
++	return Info.Format == TEXF_BGRA8_LM;
++}
++#endif
++
+ // lightmaps are 0-127
+ #define LIGHTMAP_SCALE 2
+ 
+ // and it also would be nice to overbright them
++#ifdef NOPENGLES_227
++// 227: the full 2x of the stock renderers' defaults (OpenGLDrv OneXBlending=False,
++// XOpenGLDrv LightMapIntensity), which Unreal's lighting is made for: a lightmap
++// texel of 127 lights to twice the texture colour.
++#define LIGHTMAP_OVERBRIGHT 2.0f
++#else
+ #define LIGHTMAP_OVERBRIGHT 1.4f
++#endif
+ 
+ // max vertices in a single draw call
+ #define MAX_VERTS 32768
+ 
++#ifdef NOPENGLES_469_COMPAT
++static FLOAT* UT99PortMasterFindFloatProperty469( UObject* Object, const TCHAR* PropertyName )
++{
++	if( !Object )
++		return NULL;
++	const FName WantedName( PropertyName );
++	for( TFieldIterator<UProperty> It(Object->GetClass()); It; ++It )
++	{
++		if( It->GetFName() == WantedName && It->IsA(UFloatProperty::StaticClass()) )
++			return (FLOAT*)((BYTE*)Object + It->Offset);
++	}
++	return NULL;
++}
++
++static UObject* UT99PortMasterFindObjectProperty469( UObject* Object, const TCHAR* PropertyName )
++{
++	if( !Object )
++		return NULL;
++	const FName WantedName( PropertyName );
++	for( TFieldIterator<UProperty> It(Object->GetClass()); It; ++It )
++	{
++		if( It->GetFName() == WantedName && It->IsA(UObjectProperty::StaticClass()) )
++			return *(UObject**)((BYTE*)Object + It->Offset);
++	}
++	return NULL;
++}
++
++static void UT99PortMasterSetFloatProperty469( UObject* Object, const TCHAR* PropertyName, FLOAT Value )
++{
++	FLOAT* Property = UT99PortMasterFindFloatProperty469( Object, PropertyName );
++	if( Property )
++		*Property = Value;
++}
++
++static void UT99PortMasterSyncMenuMouse469( UViewport* Viewport )
++{
++	if( !Viewport || !Viewport->GetWindow() )
++		return;
++
++	SDL_Window* Window = (SDL_Window*)Viewport->GetWindow();
++	INT WindowW = 0;
++	INT WindowH = 0;
++	INT DrawableW = 0;
++	INT DrawableH = 0;
++	SDL_GetWindowSize( Window, &WindowW, &WindowH );
++	SDL_GL_GetDrawableSize( Window, &DrawableW, &DrawableH );
++	if( WindowW <= 0 || WindowH <= 0 || DrawableW <= 0 || DrawableH <= 0 )
++		return;
++
++	USDLViewport* SDLViewport = static_cast<USDLViewport*>( Viewport );
++	UBOOL ShowMenuMouse = Viewport->bShowWindowsMouse ? 1 : 0;
++	const TCHAR* ConsoleStateName = TEXT("<none>");
++	if( Viewport->Console )
++	{
++		FStateFrame* ConsoleState = Viewport->Console->GetStateFrame();
++		if( ConsoleState && ConsoleState->StateNode )
++		{
++			ConsoleStateName = ConsoleState->StateNode->GetName();
++			static FName NAME_UT99PortMasterUWindow( TEXT("UWindow") );
++			ShowMenuMouse |= ConsoleState->StateNode->GetFName() == NAME_UT99PortMasterUWindow;
++		}
++	}
++	static UBOOL WasShowingMenuMouse = 0;
++	static UObject* CenteredRoot = NULL;
++	FLOAT GUIScale = 1.f;
++	const char* GUIScaleEnv = SDL_getenv( "UT99_GUI_SCALE" );
++	if( GUIScaleEnv )
++		GUIScale = Max<FLOAT>( (FLOAT)std::atof(GUIScaleEnv), 1.f );
++	const FLOAT CenterX = Viewport->SizeX / (2.f * GUIScale);
++	const FLOAT CenterY = Viewport->SizeY / (2.f * GUIScale);
++	UObject* Root = UT99PortMasterFindObjectProperty469( Viewport->Console, TEXT("Root") );
++
++	if( ShowMenuMouse )
++	{
++		// UWindow requests the operating-system cursor each frame. PortMaster's
++		// controller mouse is relative, so immediately restore relative capture
++		// and hide SDL's cursor if the engine released or exposed either one.
++		// This also prevents SDL from switching to its bounded absolute position
++		// after gameplay, which caused the cursor to need edge "recalibration".
++		Viewport->bWindowsMouseAvailable = 0;
++		if( !SDLViewport->MouseIsGrabbed || SDL_GetRelativeMouseMode() != SDL_TRUE )
++			SDLViewport->UpdateMouseGrabState( 1 );
++		SDL_ShowCursor( SDL_DISABLE );
++		SDL_SetWindowGrab( Window, SDL_TRUE );
++
++		if( !WasShowingMenuMouse || (Root && Root != CenteredRoot) )
++		{
++			UT99PortMasterSetFloatProperty469( Viewport->Console, TEXT("MouseX"), CenterX );
++			UT99PortMasterSetFloatProperty469( Viewport->Console, TEXT("MouseY"), CenterY );
++			UT99PortMasterSetFloatProperty469( Root, TEXT("MouseX"), CenterX );
++			UT99PortMasterSetFloatProperty469( Root, TEXT("MouseY"), CenterY );
++			UT99PortMasterSetFloatProperty469( Root, TEXT("OldMouseX"), CenterX );
++			UT99PortMasterSetFloatProperty469( Root, TEXT("OldMouseY"), CenterY );
++			Viewport->WindowsMouseX = Viewport->SizeX * 0.5f;
++			Viewport->WindowsMouseY = Viewport->SizeY * 0.5f;
++			INT DiscardX = 0;
++			INT DiscardY = 0;
++			SDL_GetRelativeMouseState( &DiscardX, &DiscardY );
++			CenteredRoot = Root;
++			std::fprintf( stderr,
++				"UT99_SOFTWARE_MENU_CURSOR scale=%.2f center=%.1f,%.1f root=%d discarded=%d,%d\n",
++				GUIScale, CenterX, CenterY, Root ? 1 : 0, DiscardX, DiscardY );
++			std::fflush( stderr );
++		}
++	}
++
++	if( ShowMenuMouse != WasShowingMenuMouse )
++	{
++		if( !ShowMenuMouse )
++		{
++			Viewport->bWindowsMouseAvailable = 1;
++			SDLViewport->UpdateMouseGrabState( 1 );
++			CenteredRoot = NULL;
++		}
++		std::fprintf( stderr,
++			"UT99_MOUSE_CAPTURE menu=%d state=%s grabbed=%d cursor=%.1f,%.1f\n",
++			ShowMenuMouse, appToAnsi(ConsoleStateName), SDLViewport->MouseIsGrabbed ? 1 : 0,
++			Viewport->WindowsMouseX, Viewport->WindowsMouseY );
++		std::fflush( stderr );
++		WasShowingMenuMouse = ShowMenuMouse;
++	}
++
++	static INT LastWindowW = -1;
++	static INT LastWindowH = -1;
++	static INT LastDrawableW = -1;
++	static INT LastDrawableH = -1;
++	static INT LastViewportW = -1;
++	static INT LastViewportH = -1;
++	if( WindowW != LastWindowW || WindowH != LastWindowH ||
++		DrawableW != LastDrawableW || DrawableH != LastDrawableH ||
++		Viewport->SizeX != LastViewportW || Viewport->SizeY != LastViewportH )
++	{
++		std::fprintf( stderr,
++			"UT99_COORDS point=%dx%d drawable=%dx%d viewport=%dx%d mouseScale=%.3fx%.3f menu=%d state=%s grabbed=%d windowsMouse=%d cursor=%.1f,%.1f\n",
++			WindowW, WindowH, DrawableW, DrawableH, Viewport->SizeX, Viewport->SizeY,
++			SDLViewport->MouseScaleX, SDLViewport->MouseScaleY,
++			ShowMenuMouse, appToAnsi(ConsoleStateName),
++			SDLViewport->MouseIsGrabbed ? 1 : 0,
++			Viewport->bWindowsMouseAvailable ? 1 : 0,
++			Viewport->WindowsMouseX, Viewport->WindowsMouseY );
++		std::fflush( stderr );
++		LastWindowW = WindowW;
++		LastWindowH = WindowH;
++		LastDrawableW = DrawableW;
++		LastDrawableH = DrawableH;
++		LastViewportW = Viewport->SizeX;
++		LastViewportH = Viewport->SizeY;
++	}
++}
++#endif
++
+ 
+ #ifdef PLATFORM_ANDROID
+ static FLOAT UT99AndroidCalcWidescreenFOVV159( FLOAT BaseFOV, FLOAT FrameX, FLOAT FrameY )
+@@ -281,12 +471,17 @@ static void UT99AndroidApplyFullViewport( UViewport* Viewport, INT FallbackX, IN
+ void UNOpenGLESRenderDevice::InternalClassInitializer( UClass* Class )
+ {
+ 	guardSlow(UNOpenGLESRenderDevice::InternalClassInitializer);
+-	new(Class, "NoFiltering",    RF_Public)UBoolProperty( CPP_PROPERTY(NoFiltering),    "Options", CPF_Config );
+-	new(Class, "Overbright",     RF_Public)UBoolProperty( CPP_PROPERTY(Overbright),     "Options", CPF_Config );
+-	new(Class, "DetailTextures", RF_Public)UBoolProperty( CPP_PROPERTY(DetailTextures), "Options", CPF_Config );
+-	new(Class, "UseVAO",         RF_Public)UBoolProperty( CPP_PROPERTY(UseVAO),         "Options", CPF_Config );
+-	new(Class, "UseBGRA",        RF_Public)UBoolProperty( CPP_PROPERTY(UseBGRA),        "Options", CPF_Config );
+-	new(Class, "WidescreenFOV",  RF_Public)UBoolProperty( CPP_PROPERTY(WidescreenFOV),  "Options", CPF_Config );
++	new(Class, TEXT("NoFiltering"),    RF_Public)UBoolProperty( CPP_PROPERTY(NoFiltering),    TEXT("Options"), CPF_Config );
++	new(Class, TEXT("Overbright"),     RF_Public)UBoolProperty( CPP_PROPERTY(Overbright),     TEXT("Options"), CPF_Config );
++#ifndef NOPENGLES_227
++	new(Class, TEXT("DetailTextures"), RF_Public)UBoolProperty( CPP_PROPERTY(DetailTextures), TEXT("Options"), CPF_Config );
++#endif
++	new(Class, TEXT("UseVAO"),         RF_Public)UBoolProperty( CPP_PROPERTY(UseVAO),         TEXT("Options"), CPF_Config );
++	new(Class, TEXT("UseBGRA"),        RF_Public)UBoolProperty( CPP_PROPERTY(UseBGRA),        TEXT("Options"), CPF_Config );
++	new(Class, TEXT("WidescreenFOV"),  RF_Public)UBoolProperty( CPP_PROPERTY(WidescreenFOV),  TEXT("Options"), CPF_Config );
++#ifdef NOPENGLES_227
++	new(Class, TEXT("MaxDecompressedTextureSize"), RF_Public)UIntProperty( CPP_PROPERTY(MaxDecompressedTextureSize), TEXT("Options"), CPF_Config );
++#endif
+ 	unguardSlow;
+ }
+ 
+@@ -298,11 +493,31 @@ void UNOpenGLESRenderDevice::StaticConstructor()
+ {
+ 	guard(UNOpenGLESRenderDevice::StaticConstructor);
+ 	InternalClassInitializer( StaticClass() );
++
++#ifdef NOPENGLES_227
++	// Config defaults belong to the class default object, which the ini then
++	// overrides. 227 copies the defaults into every new device and only then
++	// runs the C++ constructor, so values set there would hide the ini.
++	// Conservative defaults shared by the PowerVR, Mali and Mesa GLES2 paths.
++	VolumetricLighting = 1;
++	ShinySurfaces = 1;
++	Coronas = 1;
++	HighDetailActors = 1;     // Level.bHighDetailMode, which also gates weapon muzzle flashes.
++	DetailTextures = 0;       // Extra texture layer; too expensive for Mali-G31 fill rate.
++	MeshDetailTextures = 0;   // Engine-side mesh detail pass (LegacyRenderingOnly), same cost.
++	Overbright = 1;
++	NoFiltering = 0;
++	UseVAO = 0;
++	UseBGRA = 0;
++	WidescreenFOV = 0;
++	MaxDecompressedTextureSize = 512;
++#endif
+ 	unguard;
+ }
+ 
+ UNOpenGLESRenderDevice::UNOpenGLESRenderDevice()
+ {
++#ifndef NOPENGLES_227
+ 	// UT99_ANDROID_V138_VISUAL_GAMEPLAY_DEFAULTS:
+ 	// Keep the renderer's inherited high-detail flags enabled by default.
+ 	// The first-person weapon muzzle flash is guarded by Level.bHighDetailMode,
+@@ -318,7 +533,14 @@ UNOpenGLESRenderDevice::UNOpenGLESRenderDevice()
+ 	NoFiltering = false;
+ 	UseVAO = false;
+ 	UseBGRA = true;
++#ifdef NOPENGLES_469_COMPAT
++	// Conservative defaults shared by the PowerVR, Mali, and Mesa GLES2 paths.
++	DetailTextures = false;
++	UseVAO = false;
++	UseBGRA = false;
++#endif
+ 	WidescreenFOV = false;
++#endif
+ 	CurrentBrightness = -1.f;
+ }
+ 
+@@ -327,30 +549,130 @@ UBOOL UNOpenGLESRenderDevice::Init( UViewport* InViewport, INT NewX, INT NewY, I
+ 	guard(UNOpenGLESRenderDevice::Init)
+ 
+ 	debugf( NAME_Log, TEXT("NOpenGLESDrv::Init: NewX=%d, NewY=%d, ColorBytes=%d, Fullscreen=%d"), NewX, NewY, NewColorBytes, Fullscreen );
++	Viewport = InViewport;
++
++#ifdef NOPENGLES_469_COMPAT
++	// Android's NSDLDrv creates the GLES surface before the renderer is
++	// initialized. OldUnreal 469e's SDLDrv expects the renderer to request it.
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES );
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MAJOR_VERSION, 2 );
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, 0 );
++	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
++	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
++	SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 0 );
++	if( !Viewport->ResizeViewport( Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes ) )
++	{
++		debugf( NAME_Warning, TEXT("Could not create the SDL GLES2 viewport: %s"), appFromAnsi(SDL_GetError()) );
++		return false;
++	}
++#endif
++
++#ifdef NOPENGLES_227
++	// 227's SDLDrv creates the SDL window (SDL_WINDOW_OPENGL) inside
++	// ResizeViewport but, unlike 469's, never a GL context: the renderer owns
++	// it, as XOpenGLDrv does. The attributes must precede window creation,
++	// because an EGL window surface is configured when it is created.
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES );
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MAJOR_VERSION, 2 );
++	SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, 0 );
++	SDL_GL_SetAttribute( SDL_GL_DOUBLEBUFFER, 1 );
++	SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
++	SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 0 );
++	if( !Viewport->ResizeViewport( Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes ) )
++	{
++		debugf( NAME_Warning, TEXT("NOpenGLESDrv: could not create the SDL window: %ls"), appFromAnsi(SDL_GetError()) );
++		return false;
++	}
++	SDL_Window* Window = (SDL_Window*)Viewport->GetWindow();
++	if( !GLContext )
++		GLContext = SDL_GL_CreateContext( Window );
++	if( !GLContext || !SDL_GL_MakeCurrent( Window, (SDL_GLContext)GLContext ) )
++	{
++		debugf( NAME_Warning, TEXT("NOpenGLESDrv: could not create an OpenGL ES 2.0 context: %ls"), appFromAnsi(SDL_GetError()) );
++		if( GLContext )
++			SDL_GL_DestroyContext( (SDL_GLContext)GLContext );
++		GLContext = NULL;
++		return false;
++	}
+ 
++	// SDL3 returns SDL_FunctionPointer instead of void*.
++	if( !gladLoadGLES2Loader( (GLADloadproc)SDL_GL_GetProcAddress ) )
++#else
+ 	if( !gladLoadGLES2Loader( &SDL_GL_GetProcAddress ) )
++#endif
+ 	{
+-		debugf( NAME_Warning, "Could not load GLES2: %s", SDL_GetError() );
++		debugf( NAME_Warning, TEXT("Could not load GLES2: %s"), appFromAnsi(SDL_GetError()) );
+ 		return false;
+ 	}
+ 
+-	debugf( NAME_Log, "Got OpenGL %s", glGetString( GL_VERSION ) );
++	debugf( NAME_Log, TEXT("Got OpenGL %s"), appFromAnsi((const ANSICHAR*)glGetString( GL_VERSION )) );
+ 
+ 	SupportsFogMaps = true;
+ 	SupportsDistanceFog = true;
+ 
++#ifdef NOPENGLES_227
++	debugf( NAME_Log, TEXT("NOpenGLESDrv: GL_RENDERER %ls, GL_SHADING_LANGUAGE_VERSION %ls"),
++		appFromAnsi((const ANSICHAR*)glGetString( GL_RENDERER )),
++		appFromAnsi((const ANSICHAR*)glGetString( GL_SHADING_LANGUAGE_VERSION )) );
++	Description = appFromAnsi((const ANSICHAR*)glGetString( GL_RENDERER ));
++
++	// What the 227 engine may hand this device (UnRenDev.h, UTexture::GetTexture).
++	SpanBased            = 0;
++	FullscreenOnly       = 0;
++	SupportsNoClipRender = 0; // Meshes arrive clipped through DrawGouraudPolygon.
++	LegacyRenderingOnly  = 1; // No hardware extensions: the engine draws mesh detail passes itself.
++	UseLightmapAtlas     = 0; // One texture per lightmap.
++	SupportsHDLightmaps  = 0; // Lightmaps arrive as TEXF_BGRA8_LM.
++	UnsupportHDLightFlags = 0;
++	SupportsAlphaBlend   = 1; // PF_AlphaBlend: GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA.
++	NeedsMaskedFonts     = 1; // Keep PF_Masked font draws: P8 uploads ignore palette alpha, so
++	                          // Canvas' premultiplied (PF_Highlighted) font path would not work.
++	SupportsTC           = 1; // BC1/2/3 arrive compressed; UploadTexture decodes them (BCDecode.h).
++	SupportsNewBTC       = 0; // BC4/5/7 and ETC1 are decompressed by the engine...
++	DecompFormat         = TEXF_RGBA8_; // ...to RGBA8. The default, P8, cannot hold them.
++	SupportsLazyTextures = 0;
++	PrefersDeferredLoad  = 0;
++	PrecacheOnFlip       = 0;
++	GLint MaxSize = 0;
++	glGetIntegerv( GL_MAX_TEXTURE_SIZE, &MaxSize );
++	MaxTextureSize = MaxSize > 0 ? MaxSize : 2048;
++
++	DistanceFogActive = 0;
++	CurrentZTestMode = ZTEST_LessEqual;
++	appMemzero( WarnedFormats, sizeof(WarnedFormats) );
++	ShaderInfo = NULL;
++	appMemzero( TexInfo, sizeof(TexInfo) );
++	appMemzero( &CurrentSceneNode, sizeof(CurrentSceneNode) );
++	CurrentSceneNode.X = -1;
++	CurrentSceneNode.FX = -1.f;
++	debugf( NAME_Log, TEXT("NOpenGLESDrv: MaxTextureSize %i, MaxDecompressedTextureSize %i"), MaxTextureSize, MaxDecompressedTextureSize );
++
++	// The tone curve must be known before the first texture upload (PrecacheTexture).
++	ToneBrightness = -1.f;
++	UpdateTone( Viewport->GetOuterUClient() ? Viewport->GetOuterUClient()->Brightness : 0.5f );
++
++	// UE1 textures are tightly packed.
++	glPixelStorei( GL_UNPACK_ALIGNMENT, 1 );
++	glPixelStorei( GL_PACK_ALIGNMENT, 1 );
++#endif
++
+ 	ComposeSize = 256 * 256 * 4;
+-	Compose = (BYTE*)appMalloc( ComposeSize, "GLComposeBuf" );
++	Compose = (BYTE*)appMalloc( ComposeSize, TEXT("GLComposeBuf") );
+ 	verify( Compose );
+ 
+ 	VtxDataSize = 18 * MAX_VERTS; // should be enough for all attributes
+-	VtxData = (FLOAT*)appMalloc( VtxDataSize * sizeof(FLOAT), "GLVtxDataBuf" );
++	VtxData = (FLOAT*)appMalloc( VtxDataSize * sizeof(FLOAT), TEXT("GLVtxDataBuf") );
+ 	verify( VtxData );
+ 	VtxDataEnd = VtxData + VtxDataSize;
+ 	VtxDataPtr = VtxData;
+ 
++#ifdef NOPENGLES_OLDUNREAL
++	// A fan of N vertices needs 3*(N-2) indices: room for MAX_VERTS triangle vertices.
++	IdxDataSize = 3 * MAX_VERTS;
++#else
+ 	IdxDataSize = MAX_VERTS;
+-	IdxData = (GLushort*)appMalloc( IdxDataSize * sizeof(GLushort), "GLIdxDataBuf" );
++#endif
++	IdxData = (GLushort*)appMalloc( IdxDataSize * sizeof(GLushort), TEXT("GLIdxDataBuf") );
+ 	verify( IdxData );
+ 	IdxDataEnd = IdxData + IdxDataSize;
+ 	IdxDataPtr = IdxData;
+@@ -360,24 +682,33 @@ UBOOL UNOpenGLESRenderDevice::Init( UViewport* InViewport, INT NewX, INT NewY, I
+ 	{
+ 		glGenBuffers( 1, &GLBuf );
+ 		glBindBuffer( GL_ARRAY_BUFFER, GLBuf );
++#ifdef NOPENGLES_OLDUNREAL
++		// glBufferData takes bytes; FlushTriangles uploads up to VtxDataSize floats.
++		glBufferData( GL_ARRAY_BUFFER, VtxDataSize * sizeof(FLOAT), (void*)VtxData, GL_DYNAMIC_DRAW );
++#else
+ 		glBufferData( GL_ARRAY_BUFFER, VtxDataSize, (void*)VtxData, GL_DYNAMIC_DRAW );
++#endif
+ 	}
+ 
++	#ifdef PLATFORM_ANDROID
+ 	WidescreenFOV = UT99AndroidReadWidescreenFOVConfigV159( WidescreenFOV );
++	#endif
+ 	UT99_ANDROID_GLES_LOGI_V28("UT99_ANDROID_V159_WIDESCREEN_FOV_INIT config=%d", WidescreenFOV ? 1 : 0);
+-	debugf( NAME_Log, "UT99_ANDROID_V159_WIDESCREEN_FOV_INIT config=%d", WidescreenFOV ? 1 : 0 );
++#ifndef NOPENGLES_227 // WidescreenFOV only acts on Android.
++	debugf( NAME_Log, TEXT("UT99_ANDROID_V159_WIDESCREEN_FOV_INIT config=%d"), WidescreenFOV ? 1 : 0 );
++#endif
+ 
+ 	if( UseBGRA )
+ 	{
+ 		// check if BGRA is actually supported
+ 		if( !( GLAD_GL_APPLE_texture_format_BGRA8888 || GLAD_GL_EXT_texture_format_BGRA8888 || GLAD_GL_MESA_bgra ) )
+ 		{
+-			debugf( "GLES2: BGRA8888 enabled, but not supported; disabling" );
++			debugf( TEXT("GLES2: BGRA8888 enabled, but not supported; disabling") );
+ 			UseBGRA = false;
+ 		}
+ 		else
+ 		{
+-			debugf( "GLES2: BGRA8888 supported" );
++			debugf( TEXT("GLES2: BGRA8888 supported") );
+ 		}
+ 	}
+ 
+@@ -413,11 +744,11 @@ UBOOL UNOpenGLESRenderDevice::Init( UViewport* InViewport, INT NewX, INT NewY, I
+ 	CurrentPolyFlags = PF_Occlude;
+ 	CurrentShaderFlags = 0;
+ 	CurrentBrightness = -1.f;
+-	Viewport = InViewport;
+-
+ 	// Set initial viewport size
+ 	#ifdef PLATFORM_ANDROID
+     UT99AndroidForceDrawableViewportV28( Viewport, "InitSetRes", NewX, NewY );
++#elif defined(NOPENGLES_227)
++	SetGLViewport( 0, 0, Viewport->SizeX, Viewport->SizeY );
+ #else
+     glViewport( 0, 0, NewX, NewY );
+ #endif
+@@ -431,9 +762,24 @@ UBOOL UNOpenGLESRenderDevice::SetRes( INT NewX, INT NewY, INT NewColorBytes, UBO
+ {
+ 	guard(UNOpenGLESRenderDevice::SetRes);
+ 	debugf( NAME_Log, TEXT("NOpenGLESDrv::SetRes: NewX=%d, NewY=%d"), NewX, NewY );
++#if defined(NOPENGLES_469_COMPAT) || defined(NOPENGLES_227)
++	if( NewX != INDEX_NONE && NewY != INDEX_NONE )
++	{
++		if( !Viewport->ResizeViewport( Fullscreen ? (BLIT_Fullscreen | BLIT_OpenGL) : (BLIT_HardwarePaint | BLIT_OpenGL), NewX, NewY, NewColorBytes ) )
++			return false;
++	}
++#endif
++#ifdef NOPENGLES_227
++	// The window is kept across resolution changes, so is the context.
++	if( GLContext )
++		SDL_GL_MakeCurrent( (SDL_Window*)Viewport->GetWindow(), (SDL_GLContext)GLContext );
++	SetSceneNode( NULL );
++#endif
+ 	// Update GL viewport when resolution changes
+ 	#ifdef PLATFORM_ANDROID
+     UT99AndroidForceDrawableViewportV28( Viewport, "InitSetRes", NewX, NewY );
++#elif defined(NOPENGLES_227)
++	SetGLViewport( 0, 0, Viewport->SizeX, Viewport->SizeY );
+ #else
+     glViewport( 0, 0, NewX, NewY );
+ #endif
+@@ -445,7 +791,15 @@ void UNOpenGLESRenderDevice::Exit()
+ {
+ 	guard(UNOpenGLESRenderDevice::Exit);
+ 
+-	debugf( NAME_Log, "Shutting down OpenGL ES2 renderer" );
++	debugf( NAME_Log, TEXT("Shutting down OpenGL ES2 renderer") );
++
++#ifdef NOPENGLES_227
++	// The engine may switch devices outside Lock/Unlock: make sure the GL
++	// objects below are deleted in this device's context.
++	SDL_Window* Window = Viewport ? (SDL_Window*)Viewport->GetWindow() : NULL;
++	if( GLContext && Window )
++		SDL_GL_MakeCurrent( Window, (SDL_GLContext)GLContext );
++#endif
+ 
+ 	Flush( 0 );
+ 
+@@ -456,6 +810,38 @@ void UNOpenGLESRenderDevice::Exit()
+ 	}
+ 	ComposeSize = 0;
+ 
++#ifdef NOPENGLES_227
++	// Upstream leaked these and the GL programs on every device switch.
++	for( TMap<DWORD,FCachedShader>::TIterator It(ShaderMap); It; ++It )
++		glDeleteProgram( It.Value().Prog );
++	ShaderMap.Empty();
++	ShaderInfo = NULL;
++	if( UseVAO && GLBuf )
++	{
++		glDeleteBuffers( 1, &GLBuf );
++		GLBuf = 0;
++	}
++	if( VtxData )
++	{
++		appFree( VtxData );
++		VtxData = VtxDataEnd = VtxDataPtr = NULL;
++	}
++	if( IdxData )
++	{
++		appFree( IdxData );
++		IdxData = IdxDataEnd = IdxDataPtr = NULL;
++	}
++
++	// The window outlives the device (USDLViewport::Destroy deletes it after RenDev->Exit).
++	if( GLContext )
++	{
++		if( Window )
++			SDL_GL_MakeCurrent( Window, NULL );
++		SDL_GL_DestroyContext( (SDL_GLContext)GLContext );
++		GLContext = NULL;
++	}
++#endif
++
+ 	unguard;
+ }
+ 
+@@ -474,7 +860,7 @@ void UNOpenGLESRenderDevice::Flush( UBOOL AllowPrecache )
+ 
+ 	if( TexAlloc.Num() )
+ 	{
+-		debugf( NAME_Log, "Flushing %d textures", TexAlloc.Num() );
++		debugf( NAME_Log, TEXT("Flushing %d textures"), TexAlloc.Num() );
+ 		ResetTexture( 0 );
+ 		ResetTexture( 1 );
+ 		ResetTexture( 2 );
+@@ -525,7 +911,7 @@ UBOOL UNOpenGLESRenderDevice::Exec( const TCHAR* Cmd, FOutputDevice& Ar )
+ 			GConfig->Flush(0);
+ 		}
+ 		SaveConfig();
+-		debugf( NAME_Log, "UT99_ANDROID_V159_WIDESCREEN_FOV_RUNTIME live=%d", WidescreenFOV ? 1 : 0 );
++		debugf( NAME_Log, TEXT("UT99_ANDROID_V159_WIDESCREEN_FOV_RUNTIME live=%d"), WidescreenFOV ? 1 : 0 );
+ 		Ar.Logf( TEXT("%i"), WidescreenFOV ? 1 : 0 );
+ 		return 1;
+ 	}
+@@ -539,15 +925,29 @@ UBOOL UNOpenGLESRenderDevice::Exec( const TCHAR* Cmd, FOutputDevice& Ar )
+ void UNOpenGLESRenderDevice::Lock( FPlane FlashScale, FPlane FlashFog, FPlane ScreenClear, DWORD RenderLockFlags, BYTE* InHitData, INT* InHitSize )
+ {
+     guard(UNOpenGLESRenderDevice::Lock);
++#ifdef NOPENGLES_469_COMPAT
++	UT99PortMasterSyncMenuMouse469( Viewport );
++#endif
+ #ifdef PLATFORM_ANDROID
+     UT99AndroidForceDrawableViewportV28( Viewport, "Lock", Viewport ? Viewport->SizeX : 0, Viewport ? Viewport->SizeY : 0 );
+ #endif
+ 
++#ifdef NOPENGLES_227
++	// Follows UClient::Brightness every frame, as OpenGLDrv does: the video
++	// menu slider (followed by FLUSH), the BRIGHTNESS command and a plain
++	// "set ini:Engine.Engine.ViewportManager Brightness" all just change it.
++	if( Viewport && Viewport->GetOuterUClient() && Viewport->GetOuterUClient()->Brightness != ToneBrightness )
++		UpdateTone( Viewport->GetOuterUClient()->Brightness );
++	ScreenClear = ToneFinal( ScreenClear );
++#endif
+ 
+ 	glClearColor( ScreenClear.X, ScreenClear.Y, ScreenClear.Z, ScreenClear.W );
+ 	glClearDepthf( 1.f );
+ 	glDepthFunc( GL_LEQUAL );
+-
++#ifdef NOPENGLES_227
++	CurrentZTestMode = ZTEST_LessEqual;
++	DistanceFogActive = 0;
++#else
+ 	FLOAT TargetBrightness = CurrentBrightness;
+ 	if( Viewport && Viewport->GetOuterUClient() )
+ 	{
+@@ -564,6 +964,7 @@ void UNOpenGLESRenderDevice::Lock( FPlane FlashScale, FPlane FlashFog, FPlane Sc
+ 		CurrentBrightness = TargetBrightness;
+ 		UniformsChanged[UF_Brightness] = true;
+ 	}
++#endif
+ 
+ 	SetBlend( PF_Occlude );
+ 	SetShader( CurrentShaderFlags );
+@@ -577,6 +978,11 @@ void UNOpenGLESRenderDevice::Lock( FPlane FlashScale, FPlane FlashFog, FPlane Sc
+ 		ColorMod = FPlane( FlashFog.X, FlashFog.Y, FlashFog.Z, 1.f - Min( FlashScale.X * 2.f, 1.f ) );
+ 	else
+ 		ColorMod = FPlane( 0.f, 0.f, 0.f, 0.f );
++#ifdef NOPENGLES_227
++	// EndFlash composites FlashFog + Frame * (1 - W), like fog.
++	if( ColorMod != FPlane( 0.f, 0.f, 0.f, 0.f ) )
++		ColorMod = ToneFog( ColorMod );
++#endif
+ 
+ 	unguard;
+ }
+@@ -585,16 +991,24 @@ void UNOpenGLESRenderDevice::Unlock( UBOOL Blit )
+ {
+ 	guard(UNOpenGLESRenderDevice::Unlock);
+ 
++#ifndef NOPENGLES_227
++	// 227: no periodic log line; the log is written to the SD card the game streams from.
+ 	static INT UnlockCount = 0;
+ 	if( (++UnlockCount % 60) == 0 )
+ 	{
+ 		debugf( NAME_Log, TEXT("NOpenGLESDrv: Unlock %d (Blit=%d)"), UnlockCount, Blit );
+ 	}
++#endif
+ 
+ 	FlushTriangles();
+ 
+ 	glFlush();
+ 
++#if defined(NOPENGLES_469_COMPAT) || defined(NOPENGLES_227)
++	if( Blit && Viewport && Viewport->GetWindow() )
++		SDL_GL_SwapWindow( (SDL_Window*)Viewport->GetWindow() );
++#endif
++
+ 	unguard;
+ }
+ 
+@@ -606,7 +1020,12 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
+ 
+ 	SetSceneNode( Frame );
+ 	SetBlend( Surface.PolyFlags );
++#ifdef NOPENGLES_227
++	// The whole set: PF_Masked and PF_AlphaBlend select the upload variant, PF_NoSmooth the filter.
++	SetTexture( 0, *Surface.Texture, Surface.PolyFlags, 0.f );
++#else
+ 	SetTexture( 0, *Surface.Texture, ( Surface.PolyFlags & PF_Masked ), 0.f );
++#endif
+ 	if( Surface.LightMap )
+ 	{
+ 		SetTexture( 1, *Surface.LightMap, 0, -0.5f );
+@@ -628,7 +1047,8 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
+ 	FLOAT VDot = Facet.MapCoords.YAxis | Facet.MapCoords.Origin;
+ 	for( FSavedPoly* Poly = Facet.Polys; Poly; Poly = Poly->Next )
+ 	{
+-		BeginPoly();
++		if( !BeginPoly( Poly->NumPts ) )
++			continue;
+ 		for( INT i = 0; i < Poly->NumPts; i++ )
+ 		{
+ 			FLOAT U = Facet.MapCoords.XAxis | Poly->Pts[i]->Point;
+@@ -661,16 +1081,23 @@ void UNOpenGLESRenderDevice::DrawGouraudPolygon( FSceneNode* Frame, FTextureInfo
+ 
+ 	const UBOOL IsFog = ( ( PolyFlags & ( PF_RenderFog|PF_Translucent|PF_Modulated ) ) == PF_RenderFog );
+ 	const UBOOL IsModulated = ( PolyFlags & PF_Modulated );
+-#ifdef PLATFORM_ANDROID
++#if defined(PLATFORM_ANDROID) || defined(NOPENGLES_469_COMPAT)
+ 	// UT99_ANDROID_V166G_MODULATED_DECAL_MASK:
+ 	// Keep the original UE1 modulated blob-shadow/decal blend, but discard the
+ 	// light grey no-op border around paletted decal textures. This mirrors the
+ 	// Unreal1 Android path: do not redraw the shadow; only alpha-test the bright
+ 	// quad background so Show Decals can stay enabled without square borders.
+-	const UBOOL AndroidModulatedDecalMask = ( SpanBuffer != NULL ) && ( PolyFlags & PF_Modulated ) && ( PolyFlags & PF_Masked );
++	// OldUnreal 469e sends these projected P8 decals as PF_Modulated only, so use
++	// the span buffer and palette as the decal/cutout indicators instead of
++	// requiring PF_Masked.
++	const UBOOL AndroidModulatedDecalMask =
++		( SpanBuffer != NULL ) && ( PolyFlags & PF_Modulated ) && Texture.Palette;
+ 	if( AndroidModulatedDecalMask )
+ 		CurrentShaderFlags |= SF_ModulatedDecalMask;
+ #else
++	// 227: modulated draws stay neutral at mid grey because SetBlend keeps the
++	// brightness scale off them (see UpdateUniforms), so decal backgrounds need
++	// no luminance discard.
+ 	const UBOOL AndroidModulatedDecalMask = 0;
+ #endif
+ 	if( !IsModulated )
+@@ -680,22 +1107,46 @@ void UNOpenGLESRenderDevice::DrawGouraudPolygon( FSceneNode* Frame, FTextureInfo
+ 
+ 	SetSceneNode( Frame );
+ 	SetBlend( PolyFlags );
++#ifdef NOPENGLES_227
++	SetTexture( 0, Texture, PolyFlags, 0 );
++	// STY_AlphaBlend meshes carry their opacity in the vertex light alpha.
++	const UBOOL IsAlphaBlend = ( PolyFlags & PF_AlphaBlend ) != 0;
++#else
+ 	SetTexture( 0, Texture, ( PolyFlags & PF_Masked ), 0 );
++#endif
+ 	SetShader( CurrentShaderFlags );
+ 
+-	BeginPoly();
+-	for( INT i=0; i<NumPts; i++ )
++	if( BeginPoly( NumPts ) )
+ 	{
+-		FTransTexture* P = Pts[i];
+-		AttribFloat3( &P->Point.X );
+-		AttribFloat2( P->U*TexInfo[0].UMult, P->V*TexInfo[0].VMult );
+-		if( !IsModulated )
+-			AttribFloat4( P->Light.X, P->Light.Y, P->Light.Z, 1.f );
+-		if( IsFog )
+-			AttribFloat4( &P->Fog.X );
+-		PolyVertex();
++		for( INT i=0; i<NumPts; i++ )
++		{
++			FTransTexture* P = Pts[i];
++			AttribFloat3( &P->Point.X );
++#ifdef NOPENGLES_227
++			// 227 texture coordinate modifiers (Texture.TexModifier: panning, rotating, scaling).
++			// Transformed into locals: the engine shares FTransTexture points between polygons.
++			FLOAT TexU = P->U, TexV = P->V;
++			if( Texture.Modifier )
++				Texture.Modifier->TransformPointUV( TexU, TexV, Texture.USize, Texture.VSize );
++			AttribFloat2( TexU*TexInfo[0].UMult, TexV*TexInfo[0].VMult );
++			if( !IsModulated )
++				AttribFloat4( ToneColor( P->Light.X ), ToneColor( P->Light.Y ), ToneColor( P->Light.Z ), IsAlphaBlend ? P->Light.W : 1.f );
++			if( IsFog )
++			{
++				const FPlane Fog = ToneFog( P->Fog );
++				AttribFloat4( &Fog.X );
++			}
++#else
++			AttribFloat2( P->U*TexInfo[0].UMult, P->V*TexInfo[0].VMult );
++			if( !IsModulated )
++				AttribFloat4( P->Light.X, P->Light.Y, P->Light.Z, 1.f );
++			if( IsFog )
++				AttribFloat4( &P->Fog.X );
++#endif
++			PolyVertex();
++		}
++		EndPoly();
+ 	}
+-	EndPoly();
+ 
+ 	CurrentShaderFlags &= ~( SF_VtxColor|SF_VtxFog|SF_ModulatedDecalMask );
+ 
+@@ -706,16 +1157,46 @@ void UNOpenGLESRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Texture,
+ {
+ 	guard(UNOpenGLESRenderDevice::DrawTile);
+ 
++#ifdef NOPENGLES_469_COMPAT
++	// UT_Grenade emits UT_BlackSmoke sprites from UnrealShare.SmokeBlack.
++	// Their legacy modulated palette renders as an opaque square on GLES2.
++	// Suppress only that texture package; leave rocket trails, explosions, fog,
++	// and every other translucent effect untouched.
++	if( Span != NULL && Texture.Texture &&
++		appStrstr( Texture.Texture->GetPathName(), TEXT("SmokeBlack.") ) )
++		return;
++
++	// 469e identifies Canvas font draws with PF_RenderHint. Force the masked
++	// cache/upload variant even if a menu style or package omitted PF_Masked.
++	// For P8 fonts this makes palette index 0 transparent; for RGBA font pages
++	// it enables the shader's alpha discard.
++	if( PolyFlags & PF_RenderHint )
++		PolyFlags |= PF_Masked;
++#endif
++	// 227: neither hack applies. PF_RenderHint only tells the software renderer
++	// that a tile is drawn 1:1, and Canvas keeps PF_Masked on font draws
++	// because NeedsMaskedFonts is set. UnrealShare.SmokeBlack (BlackSmoke) is
++	// modulated with a mid-grey background, which stays neutral now that
++	// modulated draws ignore the brightness scale.
++
+ 	#ifdef PLATFORM_ANDROID
+     /* UT99_ANDROID_DISABLE_LEGACY_2D_SCALE_V37: v29 native viewport makes old tile scaling harmful. */
+ #endif
+     FPlane VtxColor;
+ 	if( !( PolyFlags & PF_Modulated ) )
+ 	{
++#ifdef NOPENGLES_227
++		VtxColor.X = ToneColor( Light.X );
++		VtxColor.Y = ToneColor( Light.Y );
++		VtxColor.Z = ToneColor( Light.Z );
++		// Canvas and STY_AlphaBlend sprites pass their opacity in Light.W.
++		VtxColor.W = ( PolyFlags & PF_AlphaBlend ) ? Light.W : 1.f;
++#else
+ 		VtxColor.X = Light.X;
+ 		VtxColor.Y = Light.Y;
+ 		VtxColor.Z = Light.Z;
+ 		VtxColor.W = 1.f;
++#endif
+ 	}
+ 	else
+ 	{
+@@ -766,24 +1247,38 @@ void UNOpenGLESRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Texture,
+ 
+ 	SetSceneNode( Frame );
+ 	SetBlend( PolyFlags );
++#ifdef NOPENGLES_227
++	SetTexture( 0, Texture, PolyFlags, 0.f );
++#else
+ 	SetTexture( 0, Texture, ( PolyFlags & PF_Masked ), 0.f );
++#endif
+ 	SetShader( CurrentShaderFlags );
+ 
+-	BeginPoly();
++	// Corner texture coordinates, clockwise from the top left.
++	FLOAT TexU[4] = { U * TexInfo[0].UMult, (U + UL) * TexInfo[0].UMult, (U + UL) * TexInfo[0].UMult, U * TexInfo[0].UMult };
++	FLOAT TexV[4] = { V * TexInfo[0].VMult, V * TexInfo[0].VMult, (V + VL) * TexInfo[0].VMult, (V + VL) * TexInfo[0].VMult };
++#ifdef NOPENGLES_227
++	// 227 texture coordinate modifiers work on normalized tile coordinates (XOpenGLDrv DrawTile).
++	if( Texture.Modifier )
++		for( INT i = 0; i < 4; i++ )
++			Texture.Modifier->TransformPoint( TexU[i], TexV[i] );
++#endif
++
++	BeginPoly( 4 );
+ 		AttribFloat3( RFX2 * Z * (X - Frame->FX2), RFY2 * Z * (Y - Frame->FY2), Z );
+-		AttribFloat2( U * TexInfo[0].UMult, V * TexInfo[0].VMult );
++		AttribFloat2( TexU[0], TexV[0] );
+ 		AttribFloat4( &VtxColor.X );
+ 		PolyVertex();
+ 		AttribFloat3( RFX2 * Z * (X + XL - Frame->FX2), RFY2 * Z * (Y - Frame->FY2), Z );
+-		AttribFloat2( (U + UL) * TexInfo[0].UMult, V * TexInfo[0].VMult );
++		AttribFloat2( TexU[1], TexV[1] );
+ 		AttribFloat4( &VtxColor.X );
+ 		PolyVertex();
+ 		AttribFloat3( RFX2 * Z * (X + XL - Frame->FX2), RFY2 * Z * (Y + YL - Frame->FY2), Z );
+-		AttribFloat2( (U + UL) * TexInfo[0].UMult, (V + VL) *TexInfo[0].VMult );
++		AttribFloat2( TexU[2], TexV[2] );
+ 		AttribFloat4( &VtxColor.X );
+ 		PolyVertex();
+ 		AttribFloat3( RFX2 * Z * (X - Frame->FX2), RFY2 * Z * (Y + YL - Frame->FY2), Z );
+-		AttribFloat2( U * TexInfo[0].UMult, (V + VL) * TexInfo[0].VMult );
++		AttribFloat2( TexU[3], TexV[3] );
+ 		AttribFloat4( &VtxColor.X );
+ 		PolyVertex();
+ 	EndPoly();
+@@ -797,16 +1292,101 @@ void UNOpenGLESRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Texture,
+ 	unguard;
+ }
+ 
++#ifdef NOPENGLES_227
++//
++// 2D lines and points (Canvas.Draw2DLine, engine debug lines). Drawn as
++// untextured quads through the regular triangle batch: a line becomes a one
++// pixel wide quad along it. Coordinates are screen pixels at depth Z, mapped
++// to view space like DrawTile does.
++//
+ void UNOpenGLESRenderDevice::Draw2DLine( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2 )
+ {
++	guard(UNOpenGLESRenderDevice::Draw2DLine);
++
++	FLOAT DX = P2.X - P1.X;
++	FLOAT DY = P2.Y - P1.Y;
++	const FLOAT Length = appSqrt( DX * DX + DY * DY );
++	if( Length < 0.001f )
++	{
++		Draw2DPoint( Frame, Color, LineFlags, P1.X, P1.Y, P1.X, P1.Y, P1.Z );
++		return;
++	}
++	// Half a pixel to either side of the line.
++	const FLOAT NX = -DY * 0.5f / Length;
++	const FLOAT NY =  DX * 0.5f / Length;
++
++	ResetTexture( 0 );
++	CurrentShaderFlags |= SF_VtxColor;
++	SetSceneNode( Frame );
++	SetBlend( PF_Highlighted );
++	SetShader( CurrentShaderFlags );
++
++	const FPlane VtxColor( ToneColor( Color.X ), ToneColor( Color.Y ), ToneColor( Color.Z ), 1.f );
++	BeginPoly( 4 );
++		AttribFloat3( RFX2 * P1.Z * (P1.X + NX - Frame->FX2), RFY2 * P1.Z * (P1.Y + NY - Frame->FY2), P1.Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * P2.Z * (P2.X + NX - Frame->FX2), RFY2 * P2.Z * (P2.Y + NY - Frame->FY2), P2.Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * P2.Z * (P2.X - NX - Frame->FX2), RFY2 * P2.Z * (P2.Y - NY - Frame->FY2), P2.Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * P1.Z * (P1.X - NX - Frame->FX2), RFY2 * P1.Z * (P1.Y - NY - Frame->FY2), P1.Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++	EndPoly();
+ 
++	CurrentShaderFlags &= ~SF_VtxColor;
++
++	unguard;
+ }
+ 
+ void UNOpenGLESRenderDevice::Draw2DPoint( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FLOAT X1, FLOAT Y1, FLOAT X2, FLOAT Y2, FLOAT Z )
++{
++	guard(UNOpenGLESRenderDevice::Draw2DPoint);
++
++	ResetTexture( 0 );
++	CurrentShaderFlags |= SF_VtxColor;
++	SetSceneNode( Frame );
++	SetBlend( PF_Highlighted );
++	SetShader( CurrentShaderFlags );
++
++	// The point covers the pixels from X1,Y1 to X2,Y2 inclusive.
++	X2 += 1.f;
++	Y2 += 1.f;
++	const FPlane VtxColor( ToneColor( Color.X ), ToneColor( Color.Y ), ToneColor( Color.Z ), 1.f );
++	BeginPoly( 4 );
++		AttribFloat3( RFX2 * Z * (X1 - Frame->FX2), RFY2 * Z * (Y1 - Frame->FY2), Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * Z * (X2 - Frame->FX2), RFY2 * Z * (Y1 - Frame->FY2), Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * Z * (X2 - Frame->FX2), RFY2 * Z * (Y2 - Frame->FY2), Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++		AttribFloat3( RFX2 * Z * (X1 - Frame->FX2), RFY2 * Z * (Y2 - Frame->FY2), Z );
++		AttribFloat4( &VtxColor.X );
++		PolyVertex();
++	EndPoly();
++
++	CurrentShaderFlags &= ~SF_VtxColor;
++
++	unguard;
++}
++#else
++void UNOpenGLESRenderDevice::Draw2DLine( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FVector P1, FVector P2 )
+ {
+ 
+ }
+ 
++void UNOpenGLESRenderDevice::Draw2DPoint( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FLOAT X1, FLOAT Y1, FLOAT X2, FLOAT Y2, FLOAT Z )
++{
++
++}
++#endif
++
+ void UNOpenGLESRenderDevice::EndFlash( )
+ {
+ 	guard(UNOpenGLESRenderDevice::EndFlash);
+@@ -822,13 +1402,16 @@ void UNOpenGLESRenderDevice::EndFlash( )
+ 	SetBlend( PF_Highlighted );
+ 	SetShader( CurrentShaderFlags );
+ 
+-	const FLOAT Z = 1.f;
++	// Twice the near plane distance: at exactly 1 the quad lies on the near
++	// clip plane and rounding may clip it. The corners scale with Z, so it
++	// still covers the whole view.
++	const FLOAT Z = 2.f;
+ 	const FLOAT RFX2 = RProjZ;
+ 	const FLOAT RFY2 = RProjZ * Aspect;
+ 
+ 	glDisable( GL_DEPTH_TEST );
+ 
+-	BeginPoly();
++	BeginPoly( 4 );
+ 		AttribFloat3( RFX2 * -Z, RFY2 * -Z, Z );
+ 		AttribFloat4( &ColorMod.X );
+ 		PolyVertex();
+@@ -843,6 +1426,9 @@ void UNOpenGLESRenderDevice::EndFlash( )
+ 		PolyVertex();
+ 	EndPoly();
+ 
++	// Draw now, while the depth test is off; the batch would otherwise be
++	// drawn after glEnable.
++	FlushTriangles();
+ 	glEnable( GL_DEPTH_TEST );
+ 
+ 	CurrentShaderFlags &= ~SF_VtxColor;
+@@ -869,6 +1455,51 @@ void UNOpenGLESRenderDevice::GetStats( TCHAR* Result )
+ 	unguard;
+ }
+ 
++#ifdef NOPENGLES_227
++//
++// Screenshots. GL returns RGBA rows bottom-up, the engine wants BGRA rows
++// top-down (the upstream version did not flip, UE1 a9e7d73). The default
++// framebuffer has the physical window size; when that differs from the
++// viewport size the image is resampled to SizeX x SizeY. bGammaCorrectOutput
++// needs no work: the shaders already apply the brightness scale, so the
++// framebuffer holds the corrected image.
++//
++void UNOpenGLESRenderDevice::ReadPixels( FColor* Pixels, UBOOL bGammaCorrectOutput )
++{
++	guard(UNOpenGLESRenderDevice::ReadPixels);
++
++	// The engine may read the frame before Unlock: draw what is still batched.
++	FlushTriangles();
++
++	const INT SizeX = Viewport->SizeX;
++	const INT SizeY = Viewport->SizeY;
++	const INT PhysX = Viewport->PhysicalSizeX > 0 ? Viewport->PhysicalSizeX : SizeX;
++	const INT PhysY = Viewport->PhysicalSizeY > 0 ? Viewport->PhysicalSizeY : SizeY;
++	if( SizeX <= 0 || SizeY <= 0 )
++		return;
++
++	EnsureComposeSize( PhysX * PhysY * 4 );
++	glReadPixels( 0, 0, PhysX, PhysY, GL_RGBA, GL_UNSIGNED_BYTE, Compose );
++
++	for( INT Y = 0; Y < SizeY; Y++ )
++	{
++		// Nearest source row, counted from the bottom.
++		const BYTE* SrcRow = Compose + ( PhysY - 1 - Y * PhysY / SizeY ) * PhysX * 4;
++		FColor* Dst = Pixels + Y * SizeX;
++		for( INT X = 0; X < SizeX; X++ )
++		{
++			// Callers expect blue in R and red in B, as XOpenGLDrv delivers (BMP order).
++			const BYTE* Src = SrcRow + ( X * PhysX / SizeX ) * 4;
++			Dst[X].R = Src[2];
++			Dst[X].G = Src[1];
++			Dst[X].B = Src[0];
++			Dst[X].A = Src[3];
++		}
++	}
++
++	unguard;
++}
++#else
+ void UNOpenGLESRenderDevice::ReadPixels( FColor* Pixels )
+ {
+ 	guard(UNOpenGLESRenderDevice::ReadPixels);
+@@ -891,6 +1522,7 @@ void UNOpenGLESRenderDevice::ReadPixels( FColor* Pixels )
+ 
+ 	unguard;
+ }
++#endif
+ 
+ void UNOpenGLESRenderDevice::ClearZ( FSceneNode* Frame )
+ {
+@@ -905,6 +1537,287 @@ void UNOpenGLESRenderDevice::ClearZ( FSceneNode* Frame )
+ 	unguard;
+ }
+ 
++#ifdef NOPENGLES_227
++//
++// Least-squares fit of Residual(x) ~ C0 * Row0(x) + C1 * Row1(x) + C2 * Row2(x)
++// over x = i/255, i = 1..255, Terms(x, Row, Residual) giving the values: the
++// normal equations, solved by Gauss-Jordan elimination (symmetric positive
++// definite, so no pivoting is needed). Used by UpdateTone.
++//
++template<typename FTerms> static void FitTone( FTerms Terms, DOUBLE C[3] )
++{
++	DOUBLE M[3][4] = {};
++	for( INT i = 1; i <= 255; i++ )
++	{
++		DOUBLE Row[3], Residual;
++		Terms( i / 255.0, Row, Residual );
++		for( INT r = 0; r < 3; r++ )
++		{
++			for( INT c = 0; c < 3; c++ )
++				M[r][c] += Row[r] * Row[c];
++			M[r][3] += Row[r] * Residual;
++		}
++	}
++	for( INT p = 0; p < 3; p++ )
++		for( INT r = 0; r < 3; r++ )
++			if( r != p )
++			{
++				const DOUBLE F = M[r][p] / M[p][p];
++				for( INT c = p; c < 4; c++ )
++					M[r][c] -= F * M[p][c];
++			}
++	for( INT r = 0; r < 3; r++ )
++		C[r] = M[r][3] / M[r][r];
++}
++
++//
++// Tone curve. The stock OpenGLDrv (227k_15: OpenGL.cpp Lock,
++// OpenGLBase.cpp SetColorCorrection, OpenGL_ShaderWriter.h; UseShaderGamma
++// off, as the port configures it) maps every channel x of its finished
++// 8-bit frame with a pow per fragment:
++//   B = clamp(2 * Brightness, 0.05, 2.99), g = 1.05 - 0.25 * B
++//   B <= 1: (B * x)^g
++//   B >  1: clamp(x * (1 + (1 - m) * (B - 1)))^g, m being the brightest channel
++// This renderer spreads x^g over the factors of the colour product, since
++// (a * b)^g = a^g * b^g: textures and light/fog maps get the power when they
++// are uploaded (ToneLUT, ToneLightLUT), vertex and tile colours when they are
++// batched (ToneColor), and the shader multiplies by the powers of its own
++// constants (uToneScale). What is left is a scale of the powered colour y:
++// B^g for B <= 1, exact, so the default Brightness 0.5 gives x^0.8. For B > 1
++// it is H(t) = (1 + (1 - t^(1/g)) * (B - 1))^g with t the brightest channel
++// of y, which the SF_ToneBoost shaders evaluate as a quadratic in t (a few
++// multiply-adds), fitted here by least squares of y * H over the 255 input
++// levels: within half a level for Brightness up to 1. No pow runs per
++// fragment on the Mali. Sums are approximated: fog maps, vertex fog and
++// distance fog in the shader (FOG_ADD, TONE_POW), the screen flash and
++// translucency by adding the powers (see ToneFog).
++//
++void UNOpenGLESRenderDevice::UpdateTone( FLOAT Brightness )
++{
++	guard(UNOpenGLESRenderDevice::UpdateTone);
++
++	ToneBrightness = Brightness;
++	const DOUBLE B = Clamp<DOUBLE>( Brightness * 2.0, 0.05, 2.99 );
++	const DOUBLE Gamma = 1.05 - 0.25 * B;
++	ToneBoostActive = ( B > 1.0 );
++	ToneBoost[0] = ToneBoost[1] = 0.f;
++	if( !ToneBoostActive )
++		ToneScale = (FLOAT)appPow( B, Gamma );
++	else
++	{
++		// y * (C0 + C1 * y + C2 * y^2) for a grey x (y = t = x^Gamma).
++		DOUBLE C[3];
++		FitTone( [B, Gamma]( DOUBLE X, DOUBLE Row[3], DOUBLE& Residual )
++		{
++			const DOUBLE Y = appPow( X, Gamma );
++			Row[0] = Y;
++			Row[1] = Y * Y;
++			Row[2] = Y * Y * Y;
++			Residual = appPow( Min<DOUBLE>( X * ( 1.0 + ( 1.0 - X ) * ( B - 1.0 ) ), 1.0 ), Gamma );
++		}, C );
++		ToneScale = (FLOAT)C[0];
++		ToneBoost[0] = (FLOAT)C[1];
++		ToneBoost[1] = (FLOAT)C[2];
++	}
++	// x^Gamma as x + x * (1 - x) * (C0 + C1 * x + C2 * x^2), for the distance
++	// fog amount (TONE_POW): within 3 levels at the default Gamma 0.8, the
++	// worst near x = 0.03, where x^Gamma is steepest.
++	{
++		DOUBLE C[3];
++		FitTone( [Gamma]( DOUBLE X, DOUBLE Row[3], DOUBLE& Residual )
++		{
++			const DOUBLE W = X * ( 1.0 - X );
++			Row[0] = W;
++			Row[1] = W * X;
++			Row[2] = W * X * X;
++			Residual = appPow( X, Gamma ) - X;
++		}, C );
++		for( INT i = 0; i < 3; i++ )
++			TonePow[i] = (FLOAT)C[i];
++	}
++
++	ToneGamma = (FLOAT)Gamma;
++	ToneModulatedScale = (FLOAT)appPow( 2.0, Gamma - 1.0 );
++	ToneTwo = (FLOAT)appPow( 2.0, Gamma );
++	// Light map texels t stand for 2 * t/255 (7 bits) times the overbright
++	// factor; ToneLightLUT clamps t at 127.5 first, as OpenGLDrv's light map
++	// shader does (min(LightColor, 0.5)), so bright dynamic lights saturate
++	// at the same level.
++	ToneLightMapScale = (FLOAT)appPow( 2.0 * ( Overbright ? LIGHTMAP_OVERBRIGHT : 1.0 ), Gamma );
++
++	UBOOL Changed = 0;
++	ToneIdentity = 1;
++	for( INT t = 0; t < 256; t++ )
++	{
++		const BYTE Color = (BYTE)appRound( 255.0 * appPow( t / 255.0, Gamma ) );
++		const BYTE Light = (BYTE)appRound( 255.0 * appPow( Min<DOUBLE>( t, 127.5 ) / 255.0, Gamma ) );
++		const BYTE FogAlpha = (BYTE)appRound( 255.0 * ( 1.0 - appPow( 1.0 - Min<DOUBLE>( 2.0 * t / 255.0, 1.0 ), Gamma ) ) );
++		Changed |= ( Color != ToneLUT[t] ) || ( Light != ToneLightLUT[t] ) || ( FogAlpha != ToneFogAlphaLUT[t] );
++		ToneLUT[t] = Color;
++		ToneLightLUT[t] = Light;
++		ToneFogAlphaLUT[t] = FogAlpha;
++		ToneIdentity &= ( Color == t );
++	}
++	for( INT i = 0; i <= 1024; i++ )
++		ToneColorLUT[i] = (FLOAT)appPow( i / 1024.0, Gamma );
++	UniformsChanged[UF_Brightness] = true;
++
++	debugf( NAME_Log, TEXT("NOpenGLESDrv: Brightness %.2f: x^%.3f, scale %.4f + %.4f t + %.4f t^2"),
++		Brightness, ToneGamma, ToneScale, ToneBoost[0], ToneBoost[1] );
++	// Cached textures hold the old power.
++	if( Changed && TexAlloc.Num() )
++		Flush( 0 );
++
++	unguard;
++}
++
++//
++// Copies Count RGBA texels (BGRA with SwapRB) as RGBA through the tone table
++// of their kind (ETone): ToneLUT, or ToneLightLUT for light maps. Alpha is
++// kept, except on fog maps (ToneFogAlphaLUT). Src may be Dst.
++//
++void UNOpenGLESRenderDevice::ToneRGBA( const BYTE* Src, BYTE* Dst, DWORD Count, UBOOL SwapRB, BYTE Kind ) const
++{
++	const INT R = SwapRB ? 2 : 0;
++	const INT B = SwapRB ? 0 : 2;
++	const BYTE* LUT = ( Kind == TONE_LightMap ) ? ToneLightLUT : ToneLUT;
++	const UBOOL FogMap = ( Kind == TONE_FogMap );
++	for( DWORD i = 0; i < Count; i++, Src += 4, Dst += 4 )
++	{
++		const BYTE SR = Src[R], SG = Src[1], SB = Src[B], SA = Src[3];
++		Dst[0] = LUT[SR];
++		Dst[1] = LUT[SG];
++		Dst[2] = LUT[SB];
++		Dst[3] = FogMap ? ToneFogAlphaLUT[SA] : SA;
++	}
++}
++
++//
++// Converts a rectangle in viewport pixels (origin top left, SizeX x SizeY)
++// to the GL viewport. The default framebuffer has the window's physical
++// size, which SDLDrv may report as different from SizeX x SizeY (hi-dpi,
++// or a fullscreen window larger than the requested mode); the engine's
++// image is then stretched to it, as XOpenGLDrv's framebuffer blit does.
++//
++void UNOpenGLESRenderDevice::SetGLViewport( INT X, INT Y, INT XL, INT YL )
++{
++	const INT SizeX = Max<INT>( Viewport->SizeX, 1 );
++	const INT SizeY = Max<INT>( Viewport->SizeY, 1 );
++	const INT PhysX = Viewport->PhysicalSizeX > 0 ? Viewport->PhysicalSizeX : SizeX;
++	const INT PhysY = Viewport->PhysicalSizeY > 0 ? Viewport->PhysicalSizeY : SizeY;
++	const INT X0 = X * PhysX / SizeX;
++	const INT X1 = ( X + XL ) * PhysX / SizeX;
++	const INT Y0 = ( SizeY - Y - YL ) * PhysY / SizeY;
++	const INT Y1 = ( SizeY - Y ) * PhysY / SizeY;
++	glViewport( X0, Y0, Max<INT>( X1 - X0, 1 ), Max<INT>( Y1 - Y0, 1 ) );
++}
++
++//
++// Upload textures while the level loads instead of on first sight, so BC
++// decoding does not stall the first frames that show them.
++//
++void UNOpenGLESRenderDevice::PrecacheTexture( FTextureInfo& Info, DWORD PolyFlags )
++{
++	guard(UNOpenGLESRenderDevice::PrecacheTexture);
++	// Light and fog maps are made while drawing; a fog map needs unit 2 (SetTexture).
++	if( IsLightOrFogMap( Info ) )
++		return;
++	SetTexture( 0, Info, PolyFlags, 0.f );
++	ResetTexture( 0 );
++	unguard;
++}
++
++//
++// 227 zone distance fog (ZoneInfo.bDistanceFog). Render calls PreDrawGouraud
++// before and PostDrawGouraud after the geometry of a fogged zone; everything
++// drawn in between blends towards the fog colour by eye depth (SF_DistanceFog,
++// FragmentShader.glsl.inc), with OpenGLDrv's linear/exp/exp2 formulas.
++//
++void UNOpenGLESRenderDevice::PreDrawGouraud( FSceneNode* Frame, FFogSurf& FogSurf )
++{
++	guard(UNOpenGLESRenderDevice::PreDrawGouraud);
++
++	// As OpenGLDrv: decals and projectors are drawn without distance fog (the
++	// state of the surface below them is left as it is, see PostDrawGouraud).
++	if( GUglyHackFlags & HACKFLAGS_DrawingDecal )
++		return;
++
++	if( !FogSurf.IsValid() )
++	{
++		PostDrawGouraud( Frame, FogSurf );
++		return;
++	}
++
++	// Fog must not tint the framebuffer through blended polygons: modulated
++	// ones fade to the neutral mid grey, translucent (additive) ones to black.
++	FPlane Color = FogSurf.FogColor;
++	if( FogSurf.PolyFlags & PF_Modulated )
++		Color = FPlane( 0.5f, 0.5f, 0.5f, 1.f );
++	else if( FogSurf.PolyFlags & PF_Translucent )
++		Color = FPlane( 0.f, 0.f, 0.f, 1.f );
++	else
++		Color.W = 1.f;
++	// Mixed in before the final scale, like a texel (mid grey becomes the
++	// modulated draws' neutral (0.5)^gamma).
++	Color = ToneColor( Color );
++
++	// Fog amount from the eye depth D: linear clamp(D*X+Y), exponential
++	// 1-exp(-D*X), exponential squared 1-exp(-(D*X)^2); Z selects the formula.
++	FPlane Params( 0.f, 0.f, 0.f, 0.f );
++	if( FogSurf.FogMode == 0 )
++	{
++		const FLOAT Range = Max<FLOAT>( FogSurf.FogDistanceEnd - FogSurf.FogDistanceStart, 1.f );
++		Params = FPlane( 1.f / Range, -FogSurf.FogDistanceStart / Range, 0.f, 0.f );
++	}
++	else
++		Params = FPlane( FogSurf.FogDensity, 0.f, FogSurf.FogMode == 1 ? 1.f : 2.f, 0.f );
++
++	if( !DistanceFogActive || Color != DistanceFogColor || Params != DistanceFogParams )
++	{
++		FlushTriangles();
++		DistanceFogActive = 1;
++		DistanceFogColor = Color;
++		DistanceFogParams = Params;
++		UniformsChanged[UF_DistanceFogColor] = UniformsChanged[UF_DistanceFogParams] = true;
++	}
++
++	unguard;
++}
++
++void UNOpenGLESRenderDevice::PostDrawGouraud( FSceneNode* Frame, FFogSurf& FogSurf )
++{
++	guard(UNOpenGLESRenderDevice::PostDrawGouraud);
++
++	if( GUglyHackFlags & HACKFLAGS_DrawingDecal )
++		return;
++
++	if( DistanceFogActive )
++	{
++		FlushTriangles();
++		DistanceFogActive = 0;
++	}
++
++	unguard;
++}
++
++BYTE UNOpenGLESRenderDevice::SetZTestMode( BYTE Mode )
++{
++	guard(UNOpenGLESRenderDevice::SetZTestMode);
++
++	static const GLenum DepthFuncs[ZTEST_MAX] = { GL_LESS, GL_EQUAL, GL_LEQUAL, GL_GREATER, GL_GEQUAL, GL_NOTEQUAL, GL_ALWAYS };
++	const BYTE Previous = CurrentZTestMode;
++	if( Mode < ZTEST_MAX && Mode != CurrentZTestMode )
++	{
++		FlushTriangles();
++		glDepthFunc( DepthFuncs[Mode] );
++		CurrentZTestMode = Mode;
++	}
++	return Previous;
++
++	unguard;
++}
++#endif
++
+ void UNOpenGLESRenderDevice::UpdateUniforms()
+ {
+ 	guard(UNOpenGLESRenderDevice::UpdateUniforms);
+@@ -919,10 +1832,40 @@ void UNOpenGLESRenderDevice::UpdateUniforms()
+ 	if( UniformsChanged[UF_Brightness] )
+ 	{
+ 		FlushTriangles();
++#ifdef NOPENGLES_227
++		// uToneScale (see UpdateTone). Modulated draws (decals, shadows,
++		// BlackSmoke) multiply the framebuffer, which already holds the
++		// brightness, and mid grey must stay their no-op: they get
++		// 2^(gamma-1) instead of the brightness scale, otherwise their
++		// backgrounds show as squares. SetBlend flags the change.
++		const UBOOL Modulated = ( CurrentPolyFlags & PF_Modulated ) != 0;
++		glUniform4f( ShaderInfo->Uniforms[UF_Brightness],
++			Modulated ? ToneModulatedScale : ToneScale,
++			ToneLightMapScale, ToneTwo, 2.f - ToneTwo );
++		if( ShaderInfo->Uniforms[UF_ToneBoost] >= 0 )
++			glUniform2f( ShaderInfo->Uniforms[UF_ToneBoost], Modulated ? 0.f : ToneBoost[0], Modulated ? 0.f : ToneBoost[1] );
++		if( ShaderInfo->Uniforms[UF_TonePow] >= 0 )
++			glUniform3fv( ShaderInfo->Uniforms[UF_TonePow], 1, TonePow );
++		UniformsChanged[UF_ToneBoost] = UniformsChanged[UF_TonePow] = false;
++#else
+ 		glUniform1f( ShaderInfo->Uniforms[UF_Brightness], CurrentBrightness );
++#endif
+ 		UniformsChanged[UF_Brightness] = false;
+ 	}
+ 
++#ifdef NOPENGLES_227
++	if( UniformsChanged[UF_DistanceFogColor] || UniformsChanged[UF_DistanceFogParams] )
++	{
++		if( ShaderInfo->Uniforms[UF_DistanceFogColor] >= 0 )
++		{
++			FlushTriangles();
++			glUniform4fv( ShaderInfo->Uniforms[UF_DistanceFogColor], 1, &DistanceFogColor.X );
++			glUniform4fv( ShaderInfo->Uniforms[UF_DistanceFogParams], 1, &DistanceFogParams.X );
++		}
++		UniformsChanged[UF_DistanceFogColor] = UniformsChanged[UF_DistanceFogParams] = false;
++	}
++#endif
++
+ 	for( INT i = UF_Texture0; i <= UF_Texture3; ++i )
+ 	{
+ 		if( UniformsChanged[i] && ShaderInfo->Uniforms[i] >= 0 )
+@@ -952,7 +1895,9 @@ GLuint UNOpenGLESRenderDevice::CompileShader( GLenum Type, const char* Text )
+ 	{
+ 		char Tmp[2048];
+ 		glGetShaderInfoLog( Id, sizeof(Tmp), NULL, Tmp );
+-		appErrorf( "%s shader compilation failed:\n%s", ( Type == GL_FRAGMENT_SHADER ) ? "Fragment" : "Vertex", Tmp );
++		appErrorf( TEXT("%s shader compilation failed:\n%s"),
++			appFromAnsi(( Type == GL_FRAGMENT_SHADER ) ? "Fragment" : "Vertex"),
++			appFromAnsi(Tmp) );
+ 	}
+ 
+ 	return Id;
+@@ -967,11 +1912,22 @@ UNOpenGLESRenderDevice::FCachedShader* UNOpenGLESRenderDevice::CreateShader( DWO
+ 	static const char* FlagNames[SF_Count] = {
+ 		"SF_Texture0", "SF_Texture1", "SF_Texture2", "SF_Texture3",
+ 		"SF_VtxColor", "SF_AlphaTest", "SF_Lightmap", "SF_Fogmap",
+-		"SF_Detail", "SF_VtxFog", "SF_ModulatedDecalMask"
++		"SF_Detail", "SF_VtxFog", "SF_ModulatedDecalMask", "SF_DistanceFog",
++#ifdef NOPENGLES_227
++		"SF_ToneBoost",
++#endif
+ 	};
+ 
+ 	static const char* UniformNames[UF_Count] = {
+-		"uMtx", "uBrightness", "uTexture0", "uTexture1", "uTexture2", "uTexture3"
++#ifdef NOPENGLES_227
++		"uMtx", "uToneScale", "uTexture0", "uTexture1", "uTexture2", "uTexture3",
++#else
++		"uMtx", "uBrightness", "uTexture0", "uTexture1", "uTexture2", "uTexture3",
++#endif
++		"uDistanceFogColor", "uDistanceFogParams",
++#ifdef NOPENGLES_227
++		"uToneBoost", "uTonePow",
++#endif
+ 	};
+ 
+ 	static const char* AttribNames[AT_Count] = {
+@@ -990,35 +1946,60 @@ UNOpenGLESRenderDevice::FCachedShader* UNOpenGLESRenderDevice::CreateShader( DWO
+ 	FCachedShader& NewShaderRef = ShaderMap.Set( ShaderFlags, NewShaderValue );
+ 	FCachedShader* NewShader = &NewShaderRef;
+ 
++#ifdef NOPENGLES_OLDUNREAL
++	std::string VSText;
++	std::string FSText;
++#else
+ 	FString VSText;
+ 	FString FSText;
++#endif
+ 
+ 	VSText += ShaderVersion;
+ 	FSText += ShaderVersion;
++#ifdef NOPENGLES_227
++	// Tone curve applied on the CPU, scales from uToneScale (UpdateTone).
++	FSText += "#define NOPENGLES_TONE 1\n";
++#endif
+ 
+ 	for( DWORD Flag = 1, FlagNum = 0; Flag <= SF_Max; Flag <<= 1, ++FlagNum )
+ 	{
+ 		if( ShaderFlags & Flag )
+ 		{
++#ifdef NOPENGLES_OLDUNREAL
++			char Buf[256];
++			std::snprintf( Buf, sizeof(Buf), "#define %s %u\n", FlagNames[FlagNum], Flag );
++#else
+ 			TCHAR Buf[256];
+ 			appSprintf( Buf, TEXT("#define %s %u\n"), FlagNames[FlagNum], Flag );
++#endif
+ 			VSText += Buf;
+ 			FSText += Buf;
+ 		}
+ 	}
+ 
++	// 227: unused by the shader, the overbright factor is part of uToneScale.y.
+ 	if( Overbright )
+ 	{
++#ifdef NOPENGLES_OLDUNREAL
++		char Buf[256];
++		std::snprintf( Buf, sizeof(Buf), "#define LIGHTMAP_OVERBRIGHT %f\n", LIGHTMAP_OVERBRIGHT );
++#else
+ 		TCHAR Buf[256];
+ 		appSprintf( Buf, TEXT("#define LIGHTMAP_OVERBRIGHT %f\n"), LIGHTMAP_OVERBRIGHT );
++#endif
+ 		FSText += Buf;
+ 	}
+ 
+ 	VSText += VertShaderGLSL;
+ 	FSText += FragShaderGLSL;
+ 
++#ifdef NOPENGLES_OLDUNREAL
++	GLuint VS = CompileShader( GL_VERTEX_SHADER, VSText.c_str() );
++	GLuint FS = CompileShader( GL_FRAGMENT_SHADER, FSText.c_str() );
++#else
+ 	GLuint VS = CompileShader( GL_VERTEX_SHADER, *VSText );
+ 	GLuint FS = CompileShader( GL_FRAGMENT_SHADER, *FSText );
++#endif
+ 
+ 	GLuint Prog = glCreateProgram();
+ 	glAttachShader( Prog, VS );
+@@ -1047,7 +2028,7 @@ UNOpenGLESRenderDevice::FCachedShader* UNOpenGLESRenderDevice::CreateShader( DWO
+ 	{
+ 		char Tmp[2048];
+ 		glGetProgramInfoLog( Prog, sizeof(Tmp), NULL, Tmp );
+-		appErrorf( "Failed to link shader %08x:\n%s", ShaderFlags, Tmp );
++		appErrorf( TEXT("Failed to link shader %08x:\n%s"), ShaderFlags, appFromAnsi(Tmp) );
+ 	}
+ 
+ 	glDeleteShader( VS );
+@@ -1066,6 +2047,15 @@ void UNOpenGLESRenderDevice::SetShader( DWORD ShaderFlags )
+ {
+ 	guard(UNOpenGLESRenderDevice::SetShader);
+ 
++#ifdef NOPENGLES_227
++	// Distance fog applies to everything drawn between PreDrawGouraud and PostDrawGouraud.
++	if( DistanceFogActive )
++		ShaderFlags |= SF_DistanceFog;
++	// Brightness above 0.5 (UpdateTone).
++	if( ToneBoostActive )
++		ShaderFlags |= SF_ToneBoost;
++#endif
++
+ 	if( !ShaderInfo || ShaderInfo->Flags != ShaderFlags )
+ 	{
+ 		FlushTriangles();
+@@ -1119,6 +2109,9 @@ void UNOpenGLESRenderDevice::SetSceneNode( FSceneNode* Frame )
+ 
+ 	if( Frame->X != CurrentSceneNode.X || Frame->Y != CurrentSceneNode.Y ||
+ 			Frame->XB != CurrentSceneNode.XB || Frame->YB != CurrentSceneNode.YB ||
++#ifdef NOPENGLES_227
++			Viewport->PhysicalSizeX != CurrentSceneNode.PhysicalSizeX || Viewport->PhysicalSizeY != CurrentSceneNode.PhysicalSizeY ||
++#endif
+ 			Viewport->SizeX != CurrentSceneNode.SizeX || Viewport->SizeY != CurrentSceneNode.SizeY )
+ 	{
+ 		FlushTriangles();
+@@ -1168,6 +2161,10 @@ void UNOpenGLESRenderDevice::SetSceneNode( FSceneNode* Frame )
+ 		{
+ 			UT99AndroidForceDrawableViewportV28( Viewport, "SetSceneNodeRoot", Frame->X, Frame->Y );
+ 		}
++#elif defined(NOPENGLES_227)
++		SetGLViewport( Frame->XB, Frame->YB, Frame->X, Frame->Y );
++		CurrentSceneNode.PhysicalSizeX = Viewport->PhysicalSizeX;
++		CurrentSceneNode.PhysicalSizeY = Viewport->PhysicalSizeY;
+ #else
+ 		glViewport( Frame->XB, Viewport->SizeY - Frame->Y - Frame->YB, Frame->X, Frame->Y );
+ #endif
+@@ -1212,7 +2209,14 @@ void UNOpenGLESRenderDevice::SetSceneNode( FSceneNode* Frame )
+ 		Aspect = Frame->FY / Frame->FX;
+ 		RFX2 = 2.0f * RProjZ / Frame->FX;
+ 		RFY2 = 2.0f * RProjZ * Aspect / Frame->FY;
++#ifdef NOPENGLES_227
++		// 227 maps may be seen up to FRAME_MAX_Z_RANGE (524288) units away; upstream
++		// clipped at 32768. With a 24-bit depth buffer the near plane dominates
++		// depth precision, so the far one costs nothing near the camera.
++		MtxProj = glm::frustum( -RProjZ, +RProjZ, -Aspect * RProjZ, +Aspect * RProjZ, 1.f, FRAME_MAX_Z_RANGE );
++#else
+ 		MtxProj = glm::frustum( -RProjZ, +RProjZ, -Aspect * RProjZ, +Aspect * RProjZ, 1.f, 32768.f );
++#endif
+ 		MtxMVP = MtxProj * MtxModelView;
+ 		CurrentSceneNode.FX = Frame->FX;
+ 		CurrentSceneNode.FY = Frame->FY;
+@@ -1237,11 +2241,19 @@ void UNOpenGLESRenderDevice::SetBlend( DWORD PolyFlags, UBOOL InverseOrder )
+ 	guard(UNOpenGLESRenderDevice::SetBlend);
+ 
+ 	// Adjust PolyFlags according to Unreal's precedence rules.
++#ifdef NOPENGLES_227
++	// 227: PF_AlphaBlend (straight alpha) and PF_Highlighted (premultiplied
++	// alpha) are blended modes as well; neither writes depth unless asked to.
++	if( !(PolyFlags & (PF_Translucent|PF_Modulated|PF_AlphaBlend|PF_Highlighted)) )
++#else
+ 	if( !(PolyFlags & (PF_Translucent|PF_Modulated)) )
++#endif
+ 		PolyFlags |= PF_Occlude;
+ 	else if( PolyFlags & PF_Translucent )
+ 	{
+-#ifdef PLATFORM_ANDROID
++		// 227 as well: XOpenGLDrv keeps PF_Masked on translucent polygons too
++		// (zp01-umssakuracrashsite's skybox needs it).
++#if defined(PLATFORM_ANDROID) || defined(NOPENGLES_469_COMPAT) || defined(NOPENGLES_227)
+ 		// UT99_ANDROID_V167U_TRANSLUCENT_MASKED_SMOKE_ALPHA:
+ 		// UT's thrown-rocket/grenade smoke path can arrive as a translucent
+ 		// sprite while the smoke texture itself still relies on PF_Masked/index-0
+@@ -1265,11 +2277,22 @@ void UNOpenGLESRenderDevice::SetBlend( DWORD PolyFlags, UBOOL InverseOrder )
+ 
+ 	// Detect changes in the blending modes.
+ 	DWORD Xor = CurrentPolyFlags ^ PolyFlags;
++#ifdef NOPENGLES_227
++	if( Xor & (PF_Translucent|PF_Modulated|PF_Invisible|PF_Occlude|PF_Masked|PF_Highlighted|PF_AlphaBlend) )
++	{
++		FlushTriangles();
++		// Modulated draws ignore the brightness scale, see UpdateUniforms.
++		if( Xor & PF_Modulated )
++			UniformsChanged[UF_Brightness] = true;
++		if( Xor & (PF_Translucent|PF_Modulated|PF_Highlighted|PF_AlphaBlend) )
++		{
++#else
+ 	if( Xor & (PF_Translucent|PF_Modulated|PF_Invisible|PF_Occlude|PF_Masked|PF_Highlighted) )
+ 	{
+ 		FlushTriangles();
+ 		if( Xor & (PF_Translucent|PF_Modulated|PF_Highlighted) )
+ 		{
++#endif
+ 			glEnable( GL_BLEND );
+ #ifdef PLATFORM_ANDROID
+     #define UT99_ANDROID_V27_DISABLE_SCISSOR 1
+@@ -1283,6 +2306,12 @@ void UNOpenGLESRenderDevice::SetBlend( DWORD PolyFlags, UBOOL InverseOrder )
+ 			{
+ 				glBlendFunc( GL_DST_COLOR, GL_SRC_COLOR );
+ 			}
++#ifdef NOPENGLES_227
++			else if( PolyFlags & PF_AlphaBlend )
++			{
++				glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
++			}
++#endif
+ 			else if( PolyFlags & PF_Highlighted )
+ 			{
+ 				glBlendFunc( GL_ONE, GL_ONE_MINUS_SRC_ALPHA );
+@@ -1314,6 +2343,7 @@ void UNOpenGLESRenderDevice::SetBlend( DWORD PolyFlags, UBOOL InverseOrder )
+ 	unguard;
+ }
+ 
++#ifndef NOPENGLES_227
+ void UNOpenGLESRenderDevice::UpdateTextureFilter( const FTextureInfo& Info, DWORD PolyFlags )
+ {
+ 	guard(UNOpenGLESRenderDevice::UpdateTextureFilter);
+@@ -1339,6 +2369,7 @@ void UNOpenGLESRenderDevice::UpdateTextureFilter( const FTextureInfo& Info, DWOR
+ 
+ 	unguard;
+ }
++#endif
+ 
+ void UNOpenGLESRenderDevice::ResetTexture( INT TMU )
+ {
+@@ -1357,6 +2388,7 @@ void UNOpenGLESRenderDevice::ResetTexture( INT TMU )
+ 	unguard;
+ }
+ 
++#ifndef NOPENGLES_227
+ void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD PolyFlags, FLOAT PanBias )
+ {
+ 	guard(UNOpenGLESRenderDevice::SetTexture);
+@@ -1417,7 +2449,7 @@ void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UB
+ 
+ 	if( !Info.Mips[0] )
+ 	{
+-		debugf( NAME_Warning, "Encountered texture with invalid mips!" );
++		debugf( NAME_Warning, TEXT("Encountered texture with invalid mips!") );
+ 		return;
+ 	}
+ 
+@@ -1425,8 +2457,12 @@ void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UB
+ 	INT NewComposeSize = Info.Mips[0]->USize * Info.Mips[0]->VSize * 4;
+ 	if( NewComposeSize > ComposeSize )
+ 	{
+-		Compose = (BYTE*)appRealloc( Compose, NewComposeSize, "GLComposeBuf" );
++		Compose = (BYTE*)appRealloc( Compose, NewComposeSize, TEXT("GLComposeBuf") );
+ 		verify( Compose );
++#ifdef NOPENGLES_OLDUNREAL
++		// Otherwise nearly every upload reallocates (UE1 99319bb).
++		ComposeSize = NewComposeSize;
++#endif
+ 	}
+ 
+ 	// Upload all mips.
+@@ -1490,3 +2526,409 @@ void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UB
+ 
+ 	unguard;
+ }
++
++#else // NOPENGLES_227
++
++/*-----------------------------------------------------------------------------
++	227 texture path.
++
++	UTexture::GetTexture hands this device:
++	 - TEXF_P8, the palette in Info.Palette. TEXF_MONO arrives as P8 too.
++	 - TEXF_BGRA8_LM light and fog maps (7 bits per channel).
++	 - TEXF_BGRA8 (MaterialSequence and TexCombiner output, some packages).
++	 - TEXF_RGBA8_, DecompFormat: what the engine decompresses BC4/BC5/BC7
++	   and ETC1 to, since SupportsNewBTC is 0.
++	 - TEXF_BC1/BC2/BC3 untouched, since SupportsTC is 1. Mali-G31 has no
++	   S3TC, so they are decoded here, starting from the largest mip within
++	   MaxDecompressedTextureSize. Left to the engine (SupportsTC 0) every
++	   such texture would also keep a full-size RGBA8 copy of its whole mip
++	   chain in memory.
++	 - anything else unconverted (BC6H, RGBA16, ETC2, ASTC...): reported
++	   once per format and drawn with a neutral grey texture.
++	All of it is uploaded as GL_RGBA/GL_UNSIGNED_BYTE (GL_BGRA_EXT with
++	UseBGRA), the only 32-bit format GLES2 knows.
++-----------------------------------------------------------------------------*/
++
++// Second cache entry for P8 textures drawn PF_AlphaBlend, which keep the
++// palette alpha (forced opaque otherwise). Texture cache IDs keep the object
++// index in bits 32-63 (UnCId.h), so bits 60 and 61 are free.
++#define ALPHABLEND_TEXTURE_TAG (1ULL << 61ULL)
++
++//
++// Records the size of GL level 0 and tells whether the texture must be
++// specified anew rather than updated (glTexSubImage2D): realtime textures
++// are re-uploaded into their existing levels, unless level 0 changed size
++// or the last upload was the fallback texture.
++//
++static inline UBOOL StartLevel0( UNOpenGLESRenderDevice::FCachedTexture& Bind, UBOOL WasFallback, INT USize, INT VSize )
++{
++	const UBOOL Respecify = WasFallback || USize != Bind.USize || VSize != Bind.VSize;
++	Bind.USize = USize;
++	Bind.VSize = VSize;
++	return Respecify;
++}
++
++//
++// Bytes of data behind Info.Mips[MipIndex]. Mips[] points into the
++// texture's own FMipmap array (UTexture::GetTexture), whose DataArray has
++// the size; anything else can only be trusted to hold Needed bytes.
++//
++static size_t MipDataBytes( const FTextureInfo& Info, INT MipIndex, size_t Needed )
++{
++	UTexture* Texture = Info.Texture;
++	if( Texture && Texture->Mips.Num() )
++	{
++		const PTRINT First = (PTRINT)&Texture->Mips(0);
++		const PTRINT Mip = (PTRINT)Info.Mips[MipIndex];
++		if( Mip >= First && Mip < First + Texture->Mips.Num() * (PTRINT)sizeof(FMipmap) && ( Mip - First ) % sizeof(FMipmap) == 0 )
++			return ((const FMipmap*)Mip)->DataArray.Num();
++	}
++	return Needed;
++}
++
++void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD PolyFlags, FLOAT PanBias )
++{
++	guard(UNOpenGLESRenderDevice::SetTexture);
++
++	CurrentShaderFlags |= 1 << TMU;
++
++	// Set panning.
++	FTexInfo& Tex = TexInfo[TMU];
++	Tex.UPan      = Info.Pan.X + PanBias*Info.UScale;
++	Tex.VPan      = Info.Pan.Y + PanBias*Info.VScale;
++
++	// Account for all the impact on scale normalization.
++	Tex.UMult = 1.f / (Info.UScale * static_cast<FLOAT>(Info.USize));
++	Tex.VMult = 1.f / (Info.VScale * static_cast<FLOAT>(Info.VSize));
++
++	// Find in cache. P8 textures upload differently for masked (index 0
++	// transparent) and alpha-blended (palette alpha) drawing.
++	QWORD NewCacheID = Info.CacheID;
++	if( Info.Format == TEXF_P8 )
++	{
++		if( PolyFlags & PF_Masked )
++			NewCacheID |= MASKED_TEXTURE_TAG;
++		if( PolyFlags & PF_AlphaBlend )
++			NewCacheID |= ALPHABLEND_TEXTURE_TAG;
++	}
++	FCachedTexture* Bind = BindMap.Find( NewCacheID );
++
++	// Realtime textures (fire, water, scripted) flag bRealtimeChanged; 227
++	// replaced the per-device bookkeeping with RenderTag, which changes
++	// whenever the texels do (as XOpenGLDrv checks it).
++	const UBOOL Stale = Bind && Info.bRealtimeChanged && Info.RenderTag != Bind->RenderTag;
++	if( Bind && NewCacheID == Tex.CurrentCacheID && !Stale )
++		return;
++
++	FlushTriangles();
++
++	// Make current.
++	Tex.CurrentCacheID = NewCacheID;
++	const UBOOL NewTexture = !Bind;
++	if( !Bind )
++	{
++		FCachedTexture NewBind;
++		appMemzero( &NewBind, sizeof(NewBind) );
++		Bind = &BindMap.Set( NewCacheID, NewBind );
++		glGenTextures( 1, &Bind->Id );
++		TexAlloc.AddItem( Bind->Id );
++	}
++
++	glActiveTexture( GL_TEXTURE0 + TMU );
++	glBindTexture( GL_TEXTURE_2D, Bind->Id );
++
++	if( NewTexture || Stale )
++	{
++		Bind->RenderTag = Info.RenderTag;
++		Info.bRealtimeChanged = 0;
++		// Light maps and fog map alpha have tone tables of their own;
++		// DrawComplexSurface binds light maps to unit 1 and fog maps to unit 2.
++		const BYTE Tone = !IsLightOrFogMap( Info ) ? TONE_Texture : ( TMU == 2 ) ? TONE_FogMap : TONE_LightMap;
++		if( !UploadTexture( Info, *Bind, PolyFlags, NewTexture, Tone ) )
++			UploadFallbackTexture( Info, *Bind, NewTexture );
++		// TODO: This depends on PolyFlags, not Info.
++		UpdateTextureFilter( Info, *Bind, PolyFlags );
++	}
++
++	unguard;
++}
++
++void UNOpenGLESRenderDevice::UpdateTextureFilter( const FTextureInfo& Info, const FCachedTexture& Bind, DWORD PolyFlags )
++{
++	guard(UNOpenGLESRenderDevice::UpdateTextureFilter);
++
++	// Mip filtering only if UploadTexture left a complete chain.
++	const UBOOL HasMips = Bind.MaxLevel > 0;
++	const UBOOL LightOrFogMap = IsLightOrFogMap( Info );
++	if( ( PolyFlags & PF_NoSmooth ) || ( NoFiltering && !LightOrFogMap ) )
++	{
++		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, HasMips ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST );
++		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
++	}
++	else
++	{
++		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, HasMips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR );
++		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
++	}
++
++	// Light and fog maps, and textures with a 227 UClamp/VClamp mode, do not
++	// repeat. Upstream told light maps apart by their missing palette, which
++	// would also clamp every BC and RGBA texture here.
++	glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, ( LightOrFogMap || Info.UClampMode == UClamp ) ? GL_CLAMP_TO_EDGE : GL_REPEAT );
++	glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, ( LightOrFogMap || Info.VClampMode == VClamp ) ? GL_CLAMP_TO_EDGE : GL_REPEAT );
++
++	unguard;
++}
++
++void UNOpenGLESRenderDevice::EnsureComposeSize( DWORD Size )
++{
++	guard(UNOpenGLESRenderDevice::EnsureComposeSize);
++	if( Size > ComposeSize )
++	{
++		// Upstream did not record the new size, so it reallocated on nearly every upload (UE1 99319bb).
++		Compose = (BYTE*)appRealloc( Compose, Size, TEXT("GLComposeBuf") );
++		verify( Compose );
++		ComposeSize = Size;
++	}
++	unguard;
++}
++
++void UNOpenGLESRenderDevice::UploadLevel( INT Level, INT USize, INT VSize, GLenum Format, const void* Data, UBOOL NewTexture )
++{
++	if( NewTexture )
++		glTexImage2D( GL_TEXTURE_2D, Level, Format, USize, VSize, 0, Format, GL_UNSIGNED_BYTE, Data );
++	else
++		glTexSubImage2D( GL_TEXTURE_2D, Level, 0, 0, USize, VSize, Format, GL_UNSIGNED_BYTE, Data );
++}
++
++//
++// GLES2 has no GL_TEXTURE_MAX_LEVEL: a mipmapped texture must have every
++// level down to 1x1, or it samples as black. Stored chains may stop early
++// (BC mips often end at 4x4) or lose a level to missing data; the missing
++// levels are box-filtered from the last uploaded one. Data is that level
++// (USize x VSize, 4 bytes per texel). Returns the last level.
++//
++INT UNOpenGLESRenderDevice::CompleteMipChain( INT Level, INT USize, INT VSize, const BYTE* Data, GLenum Format, UBOOL NewTexture )
++{
++	guard(UNOpenGLESRenderDevice::CompleteMipChain);
++
++	while( USize > 1 || VSize > 1 )
++	{
++		// Compose may be Data: the downsampler works in place.
++		BCDecode::DownsampleRGBA8( Data, USize, VSize, Compose );
++		USize = BCDecode::HalfSize( USize );
++		VSize = BCDecode::HalfSize( VSize );
++		Data = Compose;
++		UploadLevel( ++Level, USize, VSize, Format, Data, NewTexture );
++	}
++	return Level;
++
++	unguard;
++}
++
++UBOOL UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, FCachedTexture& Bind, DWORD PolyFlags, UBOOL NewTexture, BYTE Tone )
++{
++	guard(UNOpenGLESRenderDevice::UploadTexture);
++
++	if( Info.NumMips <= 0 || !Info.Mips[0] )
++	{
++		debugf( NAME_Warning, TEXT("NOpenGLESDrv: texture %ls has no mips"), Info.Texture ? Info.Texture->GetPathName() : TEXT("(none)") );
++		return 0;
++	}
++	const INT NumMips = Min<INT>( Info.NumMips, MAX_MIPS );
++
++	const UBOOL WasFallback = Bind.BaseMip == INDEX_NONE;
++
++	GLenum UploadFormat = GL_RGBA;
++	INT Level = -1;
++	INT USize = 0, VSize = 0;
++	const BYTE* LevelData = NULL;
++
++	BCDecode::EFormat BCFormat = BCDecode::FORMAT_BC1;
++	UBOOL IsBC = 1;
++	switch( Info.Format )
++	{
++		case TEXF_BC1: BCFormat = BCDecode::FORMAT_BC1; break;
++		case TEXF_BC2: BCFormat = BCDecode::FORMAT_BC2; break;
++		case TEXF_BC3: BCFormat = BCDecode::FORMAT_BC3; break;
++		default:       IsBC = 0; break;
++	}
++
++	if( IsBC )
++	{
++		// Decode the largest mip within MaxDecompressedTextureSize (and the GL
++		// limit); a texture without such a mip is decoded at its smallest one
++		// and halved on the CPU. Mips without data are skipped, as in
++		// OpenGLDrv's GetBaseMip.
++		uint32_t Widths[MAX_MIPS], Heights[MAX_MIPS];
++		for( INT i = 0; i < NumMips; i++ )
++		{
++			const FMipmapBase* Mip = Info.Mips[i];
++			const UBOOL Usable = Mip && Mip->DataPtr && Mip->USize > 0 && Mip->VSize > 0;
++			Widths[i]  = Usable ? Mip->USize : 0;
++			Heights[i] = Usable ? Mip->VSize : 0;
++		}
++		uint32_t Cap = MaxTextureSize;
++		if( MaxDecompressedTextureSize > 0 && (uint32_t)MaxDecompressedTextureSize < Cap )
++			Cap = MaxDecompressedTextureSize;
++		const BCDecode::MipSelection Sel = BCDecode::SelectBaseMip( Widths, Heights, NumMips, Cap );
++		if( Sel.BaseMip < 0 )
++			return 0;
++		Bind.BaseMip = Sel.BaseMip;
++
++		for( INT i = Sel.BaseMip; i < NumMips; i++ )
++		{
++			const FMipmapBase* Mip = Info.Mips[i];
++			// Further stored mips must continue the chain; a texture halved on
++			// the CPU has none (its base was the smallest usable one).
++			if( Level >= 0 && ( Sel.ExtraHalvings || !Widths[i]
++				|| Mip->USize != (INT)BCDecode::HalfSize( USize ) || Mip->VSize != (INT)BCDecode::HalfSize( VSize ) ) )
++				break;
++			const size_t Needed = BCDecode::CompressedBytes( BCFormat, Mip->USize, Mip->VSize );
++			EnsureComposeSize( BCDecode::RGBA8Bytes( Mip->USize, Mip->VSize ) );
++			if( !BCDecode::Decode( BCFormat, Mip->DataPtr, MipDataBytes( Info, i, Needed ), Mip->USize, Mip->VSize, Compose ) )
++			{
++				if( Level < 0 )
++				{
++					debugf( NAME_Warning, TEXT("NOpenGLESDrv: %ls mip %i (%ix%i) has too little data"),
++						Info.Texture ? Info.Texture->GetPathName() : TEXT("(none)"), i, Mip->USize, Mip->VSize );
++					return 0;
++				}
++				break;
++			}
++			USize = Mip->USize;
++			VSize = Mip->VSize;
++			for( uint32_t Halving = 0; Level < 0 && Halving < Sel.ExtraHalvings; Halving++ )
++			{
++				BCDecode::DownsampleRGBA8( Compose, USize, VSize, Compose );
++				USize = BCDecode::HalfSize( USize );
++				VSize = BCDecode::HalfSize( VSize );
++			}
++			if( !ToneIdentity )
++				ToneRGBA( Compose, Compose, USize * VSize, 0, TONE_Texture );
++			LevelData = Compose;
++			if( Level < 0 )
++				NewTexture |= StartLevel0( Bind, WasFallback, USize, VSize );
++			UploadLevel( ++Level, USize, VSize, GL_RGBA, LevelData, NewTexture );
++		}
++	}
++	else
++	{
++		const BYTE Format = Info.Format;
++		if( Format != TEXF_P8 && Format != TEXF_BGRA8_LM && Format != TEXF_BGRA8 && Format != TEXF_RGBA8_ )
++		{
++			// Report each format once; a map full of them would flood the log.
++			if( !( WarnedFormats[Format >> 5] & ( 1u << ( Format & 31 ) ) ) )
++			{
++				WarnedFormats[Format >> 5] |= 1u << ( Format & 31 );
++				debugf( NAME_Warning, TEXT("NOpenGLESDrv: texture format %ls is not supported (first seen on %ls); drawing grey"),
++					*FTextureFormatString( Format ), Info.Texture ? Info.Texture->GetPathName() : TEXT("(none)") );
++			}
++			return 0;
++		}
++		if( Format == TEXF_P8 && !Info.Palette )
++			return 0;
++
++		// Largest mip with data within the GL limit.
++		INT BaseMip = 0;
++		while( BaseMip < NumMips && ( !Info.Mips[BaseMip] || !Info.Mips[BaseMip]->DataPtr
++			|| Info.Mips[BaseMip]->USize > MaxTextureSize || Info.Mips[BaseMip]->VSize > MaxTextureSize ) )
++			BaseMip++;
++		if( BaseMip >= NumMips )
++			return 0;
++		Bind.BaseMip = BaseMip;
++		EnsureComposeSize( Info.Mips[BaseMip]->USize * Info.Mips[BaseMip]->VSize * 4 );
++
++		// The palette through the tone table. Its alpha is mostly garbage in
++		// old packages, so it is forced opaque, except for alpha-blended
++		// drawing (227 content that relies on it).
++		DWORD TonePal[256];
++		if( Format == TEXF_P8 )
++		{
++			const UBOOL KeepAlpha = ( PolyFlags & PF_AlphaBlend ) != 0;
++			const BYTE* Src = (const BYTE*)Info.Palette; // FColor: R, G, B, A in memory.
++			BYTE* Dst = (BYTE*)TonePal;
++			for( INT i = 0; i < 256; i++, Src += 4, Dst += 4 )
++			{
++				Dst[0] = ToneLUT[Src[0]];
++				Dst[1] = ToneLUT[Src[1]];
++				Dst[2] = ToneLUT[Src[2]];
++				Dst[3] = KeepAlpha ? Src[3] : 255;
++			}
++		}
++		// Uploaded straight from the mip data when nothing changes.
++		const UBOOL AsIs = ToneIdentity && Tone == TONE_Texture && ( Format == TEXF_RGBA8_ || ( UseBGRA && Format != TEXF_P8 ) );
++		if( AsIs )
++			UploadFormat = ( Format == TEXF_RGBA8_ ) ? GL_RGBA : GL_BGRA_EXT;
++
++		for( INT i = BaseMip; i < NumMips; i++ )
++		{
++			const FMipmapBase* Mip = Info.Mips[i];
++			if( !Mip || !Mip->DataPtr || Mip->USize <= 0 || Mip->VSize <= 0 )
++				break;
++			if( Level >= 0 && ( Mip->USize != (INT)BCDecode::HalfSize( USize ) || Mip->VSize != (INT)BCDecode::HalfSize( VSize ) ) )
++				break;
++			const DWORD Count = Mip->USize * Mip->VSize;
++			if( Format == TEXF_P8 )
++			{
++				// 8-bit indexed. Masked: index 0 is transparent.
++				const BYTE* Src = Mip->DataPtr;
++				DWORD* Dst = (DWORD*)Compose;
++				if( PolyFlags & PF_Masked )
++					for( DWORD j = 0; j < Count; j++ )
++						Dst[j] = Src[j] ? TonePal[Src[j]] : 0;
++				else
++					for( DWORD j = 0; j < Count; j++ )
++						Dst[j] = TonePal[Src[j]];
++				LevelData = Compose;
++			}
++			else if( AsIs )
++			{
++				// Already in the upload format.
++				LevelData = Mip->DataPtr;
++			}
++			else
++			{
++				// RGBA8_ as it is, BGRA8 and BGRA8_LM with red and blue swapped.
++				ToneRGBA( Mip->DataPtr, Compose, Count, Format != TEXF_RGBA8_, Tone );
++				LevelData = Compose;
++			}
++			USize = Mip->USize;
++			VSize = Mip->VSize;
++			if( Level < 0 )
++				NewTexture |= StartLevel0( Bind, WasFallback, USize, VSize );
++			UploadLevel( ++Level, USize, VSize, UploadFormat, LevelData, NewTexture );
++		}
++	}
++
++	// A chain of two or more levels is completed down to 1x1 and mip filtered;
++	// a single level (light maps, mipless textures) is not.
++	if( Level > 0 )
++		Level = CompleteMipChain( Level, USize, VSize, LevelData, UploadFormat, NewTexture );
++	Bind.MaxLevel = Level;
++	return Level >= 0;
++
++	unguard;
++}
++
++//
++// Neutral texture for formats and data this device cannot use: mid grey,
++// which also leaves modulated surfaces unchanged.
++//
++void UNOpenGLESRenderDevice::UploadFallbackTexture( FTextureInfo& Info, FCachedTexture& Bind, UBOOL NewTexture )
++{
++	guard(UNOpenGLESRenderDevice::UploadFallbackTexture);
++
++	BYTE Grey[8 * 8 * 4];
++	for( INT i = 0; i < 8 * 8 * 4; i++ )
++		Grey[i] = ( i & 3 ) == 3 ? 255 : ToneLUT[0x80];
++	// Always a new image: whatever was there before may have another size.
++	UploadLevel( 0, 8, 8, GL_RGBA, Grey, 1 );
++	Bind.BaseMip = INDEX_NONE;
++	Bind.MaxLevel = 0;
++	Bind.USize = Bind.VSize = 8;
++
++	unguard;
++}
++
++#endif // NOPENGLES_227
+diff --git a/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrvPrivate.h b/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrvPrivate.h
+index 20104ff..9637050 100644
+--- a/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrvPrivate.h
++++ b/third_party/ut99dc/Source/NOpenGLESDrv/NOpenGLESDrvPrivate.h
+@@ -4,7 +4,18 @@
+ 
+ #include "glad.h"
+ #include "glm/matrix.hpp"
++#ifdef NOPENGLES_227
++// The OldUnreal 227 SDK calls the renderer umbrella header Render.h.
++#include "Render.h"
++#else
+ #include "RenderPrivate.h"
++#endif
++
++// Code shared by the OldUnreal ports (469 and 227): Unicode TCHAR strings
++// and the std::string shader text builder.
++#if defined(NOPENGLES_469_COMPAT) || defined(NOPENGLES_227)
++#define NOPENGLES_OLDUNREAL 1
++#endif
+ 
+ /*------------------------------------------------------------------------------------
+ 	OpenGL rendering private definitions.
+@@ -18,6 +29,12 @@ enum EUniformIndex
+ 	UF_Texture1,
+ 	UF_Texture2,
+ 	UF_Texture3,
++	UF_DistanceFogColor,
++	UF_DistanceFogParams,
++#ifdef NOPENGLES_227
++	UF_ToneBoost,
++	UF_TonePow,
++#endif
+ 	UF_Count
+ };
+ 
+@@ -34,8 +51,15 @@ enum EShaderFlags : DWORD
+ 	SF_Detail    = 1 << 8,
+ 	SF_VtxFog    = 1 << 9,
+ 	SF_ModulatedDecalMask = 1 << 10, // UT99_ANDROID_V166G_MODULATED_DECAL_MASK
+-	SF_Max       = SF_ModulatedDecalMask,
+-	SF_Count     = 11,
++	SF_DistanceFog = 1 << 11, // 227 zone distance fog (PreDrawGouraud/PostDrawGouraud).
++#ifdef NOPENGLES_227
++	SF_ToneBoost = 1 << 12, // 227 Brightness above 0.5: final scale by the brightest channel (UpdateTone).
++	SF_Max       = SF_ToneBoost,
++	SF_Count     = 13,
++#else
++	SF_Max       = SF_DistanceFog,
++	SF_Count     = 12,
++#endif
+ };
+ 
+ enum EShaderAttribs
+@@ -53,9 +77,19 @@ enum EShaderAttribs
+ //
+ // GLES2 renderer based on NOpenGLDrv.
+ //
++#ifdef NOPENGLES_227
++class DLL_EXPORT_CLASS UNOpenGLESRenderDevice : public URenderDevice
++{
++	DECLARE_CLASS(UNOpenGLESRenderDevice, URenderDevice, CLASS_Config, NOpenGLESDrv)
++#elif UNREAL_TOURNAMENT_OLDUNREAL
++class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDeviceOldUnreal469
++{
++	DECLARE_CLASS(UNOpenGLESRenderDevice, URenderDeviceOldUnreal469, CLASS_Config)
++#else
+ class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDevice
+ {
+ 	DECLARE_CLASS(UNOpenGLESRenderDevice, URenderDevice, CLASS_Config)
++#endif
+ 
+ 	static constexpr INT MaxTexUnits = 4;
+ 
+@@ -63,9 +97,14 @@ class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDevice
+ 	UBOOL NoFiltering;
+ 	UBOOL UseBGRA;
+ 	UBOOL Overbright;
+-	UBOOL DetailTextures;
++#ifndef NOPENGLES_227
++	UBOOL DetailTextures; // 227: URenderDevice::DetailTextures, already a config property.
++#endif
+ 	UBOOL UseVAO;
+ 	UBOOL WidescreenFOV;
++#ifdef NOPENGLES_227
++	INT MaxDecompressedTextureSize; // Cap for BC1/2/3 textures decoded to RGBA8; 0 = GL limit.
++#endif
+ 
+ 	// All currently cached textures.
+ 	struct FCachedTexture
+@@ -73,6 +112,10 @@ class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDevice
+ 		GLuint Id;
+ 		INT BaseMip;
+ 		INT MaxLevel;
++#ifdef NOPENGLES_227
++		UINT RenderTag;     // FTextureInfo::RenderTag of the uploaded realtime texture data.
++		INT USize, VSize;   // Size of GL level 0; a re-upload of another size reallocates.
++#endif
+ 	};
+ 	TMap<QWORD, FCachedTexture> BindMap;
+ 	TArray<GLuint> TexAlloc;
+@@ -141,8 +184,43 @@ class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDevice
+ 		INT X, Y;
+ 		INT XB, YB;
+ 		INT SizeX, SizeY;
++#ifdef NOPENGLES_227
++		INT PhysicalSizeX, PhysicalSizeY;
++#endif
+ 	} CurrentSceneNode;
+ 
++#ifdef NOPENGLES_227
++	// 227 SDLDrv only creates the window; the GL context belongs to the renderer.
++	void* GLContext; // SDL_GLContext
++
++	// Zone distance fog set by PreDrawGouraud, used by every draw until PostDrawGouraud.
++	UBOOL DistanceFogActive;
++	FPlane DistanceFogColor;
++	FPlane DistanceFogParams; // X = scale, Y = bias of the eye depth, Z = mode (0 linear, 1 exp, 2 exp2).
++
++	BYTE CurrentZTestMode;     // ZTEST_* of SetZTestMode.
++	DWORD WarnedFormats[8];    // Texture formats already reported as unsupported (bit per ETextureFormat).
++
++	// The stock OpenGLDrv's brightness and gamma curve. Its power is applied
++	// to each factor of the colour product on the CPU instead of per fragment
++	// (see UpdateTone); the shader only scales the result. Textures are
++	// uploaded with the power applied, so a change of ToneGamma flushes them.
++	FLOAT ToneBrightness;      // UClient::Brightness the tone was computed for.
++	FLOAT ToneGamma;           // Power applied to texels, light/fog maps and colours.
++	FLOAT ToneScale;           // Final colour scale; above Brightness 0.5 the constant term of the boost polynomial.
++	UBOOL ToneBoostActive;     // Brightness above 0.5: shaders scale by a polynomial in the brightest channel (SF_ToneBoost).
++	FLOAT ToneBoost[2];        // Its linear and quadratic terms.
++	FLOAT TonePow[3];          // Polynomial for x^Gamma in the shader (distance fog amount).
++	FLOAT ToneModulatedScale;  // Final scale of modulated draws: 2^(Gamma-1) keeps mid grey neutral.
++	FLOAT ToneLightMapScale;   // (2*overbright)^Gamma: light map texels hold (t/255)^Gamma.
++	FLOAT ToneTwo;             // 2^Gamma: fog maps and detail textures are stored at half intensity.
++	UBOOL ToneIdentity;        // ToneLUT is the identity: textures may be uploaded as they are.
++	BYTE ToneLUT[256];         // 255 * (t/255)^Gamma for texture and fog map colour bytes.
++	BYTE ToneLightLUT[256];    // The same for light maps, with t clamped at 127.5 first.
++	BYTE ToneFogAlphaLUT[256]; // Fog map alpha t: 255 * (1 - (1 - 2t/255)^Gamma).
++	FLOAT ToneColorLUT[1025];  // x^Gamma on [0,1] for vertex and tile colours, linearly interpolated.
++#endif
++
+ 	// Constructors.
+ 	UNOpenGLESRenderDevice();
+ 	static void InternalClassInitializer( UClass* Class );
+@@ -166,20 +244,88 @@ class DLL_EXPORT UNOpenGLESRenderDevice : public URenderDevice
+ 	virtual void Draw2DPoint( FSceneNode* Frame, FPlane Color, DWORD LineFlags, FLOAT X1, FLOAT Y1, FLOAT X2, FLOAT Y2, FLOAT Z ) override;
+ 	virtual void PushHit( const BYTE* Data, INT Count ) override;
+ 	virtual void PopHit( INT Count, UBOOL bForce ) override;
++#ifdef NOPENGLES_227
++	virtual void ReadPixels( FColor* Pixels, UBOOL bGammaCorrectOutput ) override;
++#else
+ 	virtual void ReadPixels( FColor* Pixels ) override;
++#endif
+ 	virtual void ClearZ( FSceneNode* Frame ) override;
++#ifdef NOPENGLES_227
++	virtual void PrecacheTexture( FTextureInfo& Info, DWORD PolyFlags ) override;
++	virtual void PreDrawGouraud( FSceneNode* Frame, FFogSurf& FogSurf ) override;
++	virtual void PostDrawGouraud( FSceneNode* Frame, FFogSurf& FogSurf ) override;
++	virtual BYTE SetZTestMode( BYTE Mode ) override;
++	// Not overridden, the URenderDevice defaults are what this renderer needs:
++	// DrawGouraudPolyList (splits into DrawGouraudPolygon calls, used by projectors),
++	// PushClipPlane/PopClipPlane (return 0: the engine clips in software),
++	// PushRenderToTexture (returns FALSE), BeginMeshDraw/EndMeshDraw, DrawPass,
++	// ResetGamma (no hardware gamma ramp is touched; Lock follows Brightness).
++#endif
+ 
+ 	// UNOpenGLESRenderDevice interface.
+ 	void UpdateUniforms();
+ 	GLuint CompileShader( GLenum Type, const char* Text );
+ 	FCachedShader* CreateShader( DWORD ShaderFlags );
+ 	void SetShader( DWORD ShaderFlags );
++#ifdef NOPENGLES_227
++	virtual void SetSceneNode( FSceneNode* Frame ) override;
++#else
+ 	void SetSceneNode( FSceneNode* Frame );
++#endif
+ 	void SetBlend( DWORD PolyFlags, UBOOL InverseOrder = false );
+ 	void SetTexture( INT TMU, FTextureInfo& Info, DWORD PolyFlags, FLOAT PanBias );
+ 	void ResetTexture( INT TMU );
++#ifdef NOPENGLES_227
++	enum ETone { TONE_Texture, TONE_LightMap, TONE_FogMap }; // Tone table of an upload (ToneRGBA).
++	UBOOL UploadTexture( FTextureInfo& Info, FCachedTexture& Bind, DWORD PolyFlags, UBOOL NewTexture, BYTE Tone );
++	void UploadLevel( INT Level, INT USize, INT VSize, GLenum Format, const void* Data, UBOOL NewTexture );
++	INT CompleteMipChain( INT Level, INT USize, INT VSize, const BYTE* Data, GLenum Format, UBOOL NewTexture );
++	void UploadFallbackTexture( FTextureInfo& Info, FCachedTexture& Bind, UBOOL NewTexture );
++	void UpdateTextureFilter( const FTextureInfo& Info, const FCachedTexture& Bind, DWORD PolyFlags );
++	void EnsureComposeSize( DWORD Size );
++	void SetGLViewport( INT X, INT Y, INT XL, INT YL );
++	void UpdateTone( FLOAT Brightness );
++	void ToneRGBA( const BYTE* Src, BYTE* Dst, DWORD Count, UBOOL SwapRB, BYTE Kind ) const;
++
++	// x^ToneGamma of a colour channel (vertex light and fog, tile colours).
++	inline FLOAT ToneColor( FLOAT X ) const
++	{
++		if( X <= 0.f )
++			return 0.f;
++		if( X >= 1.f || X < 1.f / 1024.f )
++			return (FLOAT)appPow( X, ToneGamma ); // Rare: overbright vertex light, near black.
++		const FLOAT F = X * 1024.f;
++		const INT I = (INT)F;
++		return ToneColorLUT[I] + ( ToneColorLUT[I + 1] - ToneColorLUT[I] ) * ( F - I );
++	}
++	inline FPlane ToneColor( const FPlane& C ) const
++	{
++		return FPlane( ToneColor( C.X ), ToneColor( C.Y ), ToneColor( C.Z ), C.W );
++	}
++	// The whole curve on the CPU, as the shader ends (screen clear colour).
++	inline FPlane ToneFinal( const FPlane& C ) const
++	{
++		FPlane T = ToneColor( FPlane( Min( C.X, 1.f ), Min( C.Y, 1.f ), Min( C.Z, 1.f ), C.W ) );
++		FLOAT Scale = ToneScale;
++		if( ToneBoostActive )
++		{
++			const FLOAT M = Max( T.X, Max( T.Y, T.Z ) );
++			Scale += M * ( ToneBoost[0] + M * ToneBoost[1] );
++		}
++		return FPlane( T.X * Scale, T.Y * Scale, T.Z * Scale, C.W );
++	}
++	// A fog colour composited as Fog + Colour * (1 - W) (vertex fog, the
++	// screen flash): the fog colour and 1 - W both get the power, so pure
++	// attenuation and pure addition stay exact. The shader adds vertex fog
++	// with FOG_ADD; the flash is added by the blend unit.
++	inline FPlane ToneFog( const FPlane& Fog ) const
++	{
++		return FPlane( ToneColor( Fog.X ), ToneColor( Fog.Y ), ToneColor( Fog.Z ), 1.f - ToneColor( 1.f - Fog.W ) );
++	}
++#else
+ 	void UploadTexture( FTextureInfo& Info, UBOOL Masked, UBOOL NewTexture );
+ 	void UpdateTextureFilter( const FTextureInfo& Info, DWORD PolyFlags );
++#endif
+ 
+ private:
+ 	// Fixed function mode emulation.
+@@ -198,10 +344,27 @@ private:
+ 		IdxDataPtr = IdxData;
+ 	}
+ 
+-	inline void BeginPoly()
++	//
++	// Starts a polygon of NumPts vertices for the current shader. Returns 0
++	// for a degenerate polygon, which must then be skipped: EndPoly would emit
++	// a triangle of vertices that were never written. Flushes the batch first
++	// if the polygon would not fit: past the vertex buffer, past the index
++	// buffer (3 indices per fan triangle) or past the 16-bit index range.
++	// Without this check big batches wrote past both buffers, the Mali
++	// "diagonal line" artefact Unreal-Android fixed with PreparePoly (v2.0.3).
++	//
++	inline UBOOL BeginPoly( INT NumPts )
+ 	{
++		if( NumPts < 3 )
++			return 0;
++		const DWORD NumFloats = ShaderInfo ? ShaderInfo->NumFloats : 0;
++		if( VtxDataPtr + NumPts * NumFloats > VtxDataEnd
++		 || IdxDataPtr + 3 * ( NumPts - 2 ) > IdxDataEnd
++		 || (DWORD)IdxCount + NumPts > 0xFFFF )
++			FlushTriangles();
+ 		VtxPolyVerts = 0;
+ 		IdxBase = IdxCount;
++		return 1;
+ 	}
+ 
+ 	inline void AttribFloat2( FLOAT X, FLOAT Y )
+diff --git a/third_party/ut99dc/Source/NOpenGLESDrv/VertexShader.glsl.inc b/third_party/ut99dc/Source/NOpenGLESDrv/VertexShader.glsl.inc
+index ce33a96..ada32d6 100644
+--- a/third_party/ut99dc/Source/NOpenGLESDrv/VertexShader.glsl.inc
++++ b/third_party/ut99dc/Source/NOpenGLESDrv/VertexShader.glsl.inc
+@@ -1,22 +1,28 @@
+ R""(
+ 
+-attribute mediump vec3 aPosition;
+-varying mediump vec3 vPosition;
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++#define UT99_WORLD_PRECISION highp
++#else
++#define UT99_WORLD_PRECISION mediump
++#endif
++
++attribute highp vec3 aPosition;
++varying UT99_WORLD_PRECISION vec3 vPosition;
+ #ifdef SF_Texture0
+-attribute mediump vec2 aTexCoord0;
+-varying mediump vec2 vTexCoord0;
++attribute UT99_WORLD_PRECISION vec2 aTexCoord0;
++varying UT99_WORLD_PRECISION vec2 vTexCoord0;
+ #endif
+ #ifdef SF_Texture1
+-attribute mediump vec2 aTexCoord1;
+-varying mediump vec2 vTexCoord1;
++attribute UT99_WORLD_PRECISION vec2 aTexCoord1;
++varying UT99_WORLD_PRECISION vec2 vTexCoord1;
+ #endif
+ #ifdef SF_Texture2
+-attribute mediump vec2 aTexCoord2;
+-varying mediump vec2 vTexCoord2;
++attribute UT99_WORLD_PRECISION vec2 aTexCoord2;
++varying UT99_WORLD_PRECISION vec2 vTexCoord2;
+ #endif
+ #ifdef SF_Texture3
+-attribute mediump vec2 aTexCoord3;
+-varying mediump vec2 vTexCoord3;
++attribute UT99_WORLD_PRECISION vec2 aTexCoord3;
++varying UT99_WORLD_PRECISION vec2 vTexCoord3;
+ #endif
+ #ifdef SF_VtxColor
+ attribute lowp vec4 aVtxColor;
+@@ -49,7 +55,7 @@ void main()
+ #ifdef SF_VtxFog
+ 	vVtxFog = aVtxFog;
+ #endif
+-#ifdef SF_Detail
++#if defined(SF_Detail) || defined(SF_DistanceFog)
+ 	vPosition = aPosition;
+ #endif
+ 	gl_Position = uMtx * vec4(aPosition, 1.0);

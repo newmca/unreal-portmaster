@@ -1,0 +1,7 @@
+[public]
+Object=(Name=ChicoMarineSkins.dood0,Class=Texture,Description="Black")
+Object=(Name=ChicoMarineSkins.bdoo0,Class=Texture,Description="Green")
+Object=(Name=ChicoMarineSkins.gdoo0,Class=Texture,Description="Über-Green")
+Object=(Name=ChicoMarineSkins.dood1face,Class=Texture,Description="Black")
+Object=(Name=ChicoMarineSkins.bdoo1face,Class=Texture,Description="Green")
+Object=(Name=ChicoMarineSkins.gdoo1face,Class=Texture,Description="Über-Green")

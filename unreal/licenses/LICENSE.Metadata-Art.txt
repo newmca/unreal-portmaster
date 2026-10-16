@@ -1,0 +1,33 @@
+The files cover.jpg and screenshot.jpg are authentic in-game captures of
+Unreal Gold content, made for this PortMaster package on 2026-10-05. No
+generated or AI-made imagery was used.
+
+Both were rendered by the OldUnreal 227k_15 engine (the amd64 Linux build)
+with this package's own game data, its OpenGLDrv renderer build, and its
+config/UnrealLinux.ini and config/User.ini. The engine ran in a headless test
+container (Xvfb with Mesa llvmpipe).
+
+screenshot.jpg shows NyLeve's Falls (NyLeve.unr), with a Skaarj warrior
+attacking the player near the Nali village. The scene was staged with the
+game's own console commands: god, then ghost and walk to reach the village,
+then summon UnrealI.SkaarjWarrior. It was rendered at 1280x960 with
+HudScaler=2 and downsampled to the PortMaster 640x480 metadata format. It was
+not otherwise altered.
+
+cover.jpg is a frame of the original Unreal intro flyby (Unreal.unr, the Nali
+castle). It was rendered at 1920x1440 with the intro's logo overlay switched
+off through the console. The frame was then:
+
+  - cropped to a square;
+  - darkened towards the bottom;
+  - given the title "UNREAL GOLD", set in DejaVu Serif Bold (DejaVu fonts,
+    Bitstream Vera license);
+  - scaled to 480x480;
+  - centred on a black 640x480 canvas, like the Unreal Tournament '99 port's
+    cover.jpg.
+
+Unreal, Unreal Gold, Return to Na Pali and all related imagery and
+intellectual property belong to Epic Games, Inc. Unreal was developed by Epic
+MegaGames and Digital Extremes, and Return to Na Pali by Legend
+Entertainment. These images are used only to identify the game in the
+PortMaster catalogue.

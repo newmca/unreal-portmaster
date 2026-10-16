@@ -1,0 +1,9 @@
+[Public]
+Object=(Name=FNaliSkins.Armored,Class=Class,MetaClass=Engine.Texture,Description="FNali;Armored")
+Object=(Name=FNaliSkins.NaliBra,Class=Class,MetaClass=Engine.Texture,Description="FNali;NaliBra")
+Object=(Name=FNaliSkins.NaliTopless,Class=Class,MetaClass=Engine.Texture,Description="FNali;NaliTopless")
+Object=(Name=FNaliSkins.PriestessBra,Class=Class,MetaClass=Engine.Texture,Description="FNali;PriestessBra")
+Object=(Name=FNaliSkins.PriestessTopless,Class=Class,MetaClass=Engine.Texture,Description="FNali;PriestessTopless")
+Object=(Name=FNaliSkins.SlaveBra,Class=Class,MetaClass=Engine.Texture,Description="FNali;SlaveBra")
+Object=(Name=FNaliSkins.SlaveTopless,Class=Class,MetaClass=Engine.Texture,Description="FNali;SlaveTopless")
+Object=(Name=FNaliSkins.Vandora,Class=Class,MetaClass=Engine.Texture,Description="FNali;Vandora")

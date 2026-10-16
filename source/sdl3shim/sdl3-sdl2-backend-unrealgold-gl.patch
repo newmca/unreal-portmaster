@@ -1,0 +1,164 @@
+Unreal Gold port: OpenGL ES context fixes for the SDL3-over-SDL2 shim.
+
+Applies to bmdhacks/SDL@6057d79baf8321bf190479a699655f06cc2a962f after
+sdl3-sdl2-backend-fixes.patch (PortMaster). Touches only src/video/sdl2/.
+
+1. SDL_sdl2opengles.c, SDL_sdl2opengles.h: SDL2_GLES_ApplyAttributes()
+   copies SDL3's GL attributes into SDL2. Upstream copied them once, at the
+   first SDL_GL_LoadLibrary, and later only profile/major/minor at context
+   creation. SDL2 chooses its EGL config when it creates the window, so
+   anything set after SDL_GL_LoadLibrary never reached it (227's OpenGLDrv
+   sets depth/RGB/double-buffer after loading the library: MinDepthBits
+   was ignored). Now also forwards multisample, share-with-current-context
+   and sRGB; context flags are deliberately left alone.
+2. Same function: a non-ES request older than 2.0 (OpenGLDrv's first probe
+   uses profile 0 / version 0.0) is asked of SDL2 as ES 2.0 instead of
+   becoming EGL_CONTEXT_CLIENT_VERSION 1. Mesa refuses that ES 1.x request
+   on the window's ES2 config (EGL_BAD_ALLOC) and OpenGLDrv then queries the
+   missing context; where an ES 1.x context does exist, the probe's
+   glGetIntegerv(GL_MAJOR_VERSION) is invalid on it.
+3. SDL_sdl2window.c: apply the attributes right before SDL2_CreateWindow
+   for OpenGL windows, where SDL2 picks the EGL config.
+4. SDL_sdl2window.c: SDL2_DestroySDLWindow no longer deletes the last
+   context created on the window. SDL3 contexts are not owned by windows;
+   227 destroys its context before its window at exit, so upstream deleted
+   it twice (and Taisei's context died with its probe window).
+
+diff --git a/src/video/sdl2/SDL_sdl2opengles.c b/src/video/sdl2/SDL_sdl2opengles.c
+index b544f7d..feab98b 100644
+--- a/src/video/sdl2/SDL_sdl2opengles.c
++++ b/src/video/sdl2/SDL_sdl2opengles.c
+@@ -25,17 +25,40 @@
+ #define SDL2_GL_DEPTH_SIZE            6
+ #define SDL2_GL_STENCIL_SIZE          7
+ #define SDL2_GL_DOUBLEBUFFER          5
+-
+-bool SDL2_GLES_LoadLibrary(SDL_VideoDevice *_this, const char *path)
++#define SDL2_GL_MULTISAMPLEBUFFERS    13
++#define SDL2_GL_MULTISAMPLESAMPLES    14
++#define SDL2_GL_SHARE_WITH_CURRENT_CONTEXT 22
++#define SDL2_GL_FRAMEBUFFER_SRGB_CAPABLE   23
++
++/* Copy SDL3's GL attributes into SDL2. SDL2 reads them when it creates a
++ * window (EGL config and surface) and when it creates a context (version,
++ * sharing), so this runs before both and not only at the first
++ * SDL_GL_LoadLibrary: apps may set attributes after loading the library
++ * (Unreal 227's OpenGLDrv sets its depth size between SDL_GL_LoadLibrary
++ * and SDL_CreateWindow). Context flags are not forwarded: they are meant
++ * for desktop GL, and a non-zero value makes SDL2 use
++ * EGL_KHR_create_context attributes that ES drivers may reject. */
++void SDL2_GLES_ApplyAttributes(SDL_VideoDevice *_this)
+ {
++    int major = _this->gl_config.major_version;
++    int minor = _this->gl_config.minor_version;
++
+     if (!SDL2_GL_SetAttribute) {
+-        return SDL_SetError("SDL2 GL functions not available");
++        return;
++    }
++
++    /* Only OpenGL ES is available behind SDL2, so a desktop request is
++     * passed on as ES x.y. A desktop "default" request (0.0, like
++     * OpenGLDrv's first probe, or 1.x) would become an ES 1.x context:
++     * ask for ES 2.0 instead. */
++    if (_this->gl_config.profile_mask != SDL_GL_CONTEXT_PROFILE_ES && major < 2) {
++        major = 2;
++        minor = 0;
+     }
+ 
+-    /* Configure SDL2 for the GL context the app wants */
+     SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_PROFILE_MASK, SDL2_GL_CONTEXT_PROFILE_ES);
+-    SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MAJOR_VERSION, _this->gl_config.major_version);
+-    SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MINOR_VERSION, _this->gl_config.minor_version);
++    SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MAJOR_VERSION, major);
++    SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MINOR_VERSION, minor);
+     SDL2_GL_SetAttribute(SDL2_GL_RED_SIZE, _this->gl_config.red_size);
+     SDL2_GL_SetAttribute(SDL2_GL_GREEN_SIZE, _this->gl_config.green_size);
+     SDL2_GL_SetAttribute(SDL2_GL_BLUE_SIZE, _this->gl_config.blue_size);
+@@ -43,6 +66,20 @@ bool SDL2_GLES_LoadLibrary(SDL_VideoDevice *_this, const char *path)
+     SDL2_GL_SetAttribute(SDL2_GL_DEPTH_SIZE, _this->gl_config.depth_size);
+     SDL2_GL_SetAttribute(SDL2_GL_STENCIL_SIZE, _this->gl_config.stencil_size);
+     SDL2_GL_SetAttribute(SDL2_GL_DOUBLEBUFFER, _this->gl_config.double_buffer);
++    SDL2_GL_SetAttribute(SDL2_GL_MULTISAMPLEBUFFERS, _this->gl_config.multisamplebuffers);
++    SDL2_GL_SetAttribute(SDL2_GL_MULTISAMPLESAMPLES, _this->gl_config.multisamplesamples);
++    SDL2_GL_SetAttribute(SDL2_GL_SHARE_WITH_CURRENT_CONTEXT, _this->gl_config.share_with_current_context);
++    SDL2_GL_SetAttribute(SDL2_GL_FRAMEBUFFER_SRGB_CAPABLE, _this->gl_config.framebuffer_srgb_capable);
++}
++
++bool SDL2_GLES_LoadLibrary(SDL_VideoDevice *_this, const char *path)
++{
++    if (!SDL2_GL_SetAttribute) {
++        return SDL_SetError("SDL2 GL functions not available");
++    }
++
++    /* Configure SDL2 for the GL context the app wants */
++    SDL2_GLES_ApplyAttributes(_this);
+ 
+     /* SDL2 manages the actual library loading */
+     _this->gl_config.driver_loaded = 1;
+@@ -101,11 +138,7 @@ SDL_GLContext SDL2_GLES_CreateContext(SDL_VideoDevice *_this, SDL_Window *window
+     }
+ 
+     /* Set GL attributes before context creation */
+-    if (SDL2_GL_SetAttribute) {
+-        SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_PROFILE_MASK, SDL2_GL_CONTEXT_PROFILE_ES);
+-        SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MAJOR_VERSION, _this->gl_config.major_version);
+-        SDL2_GL_SetAttribute(SDL2_GL_CONTEXT_MINOR_VERSION, _this->gl_config.minor_version);
+-    }
++    SDL2_GLES_ApplyAttributes(_this);
+ 
+     void *ctx = SDL2_GL_CreateContext(data->sdl2_window);
+     if (!ctx) {
+diff --git a/src/video/sdl2/SDL_sdl2opengles.h b/src/video/sdl2/SDL_sdl2opengles.h
+index 51c6f08..9b6f310 100644
+--- a/src/video/sdl2/SDL_sdl2opengles.h
++++ b/src/video/sdl2/SDL_sdl2opengles.h
+@@ -8,6 +8,7 @@
+ 
+ #ifdef SDL_VIDEO_DRIVER_SDL2
+ 
++extern void SDL2_GLES_ApplyAttributes(SDL_VideoDevice *_this);
+ extern bool SDL2_GLES_LoadLibrary(SDL_VideoDevice *_this, const char *path);
+ extern SDL_FunctionPointer SDL2_GLES_GetProcAddress(SDL_VideoDevice *_this, const char *proc);
+ extern void SDL2_GLES_UnloadLibrary(SDL_VideoDevice *_this);
+diff --git a/src/video/sdl2/SDL_sdl2window.c b/src/video/sdl2/SDL_sdl2window.c
+index 01deb65..a1eebab 100644
+--- a/src/video/sdl2/SDL_sdl2window.c
++++ b/src/video/sdl2/SDL_sdl2window.c
+@@ -9,6 +9,7 @@
+ #include "../../events/SDL_windowevents_c.h"
+ #include "SDL_sdl2video.h"
+ #include "SDL_sdl2window.h"
++#include "SDL_sdl2opengles.h"
+ 
+ /* SDL2 window position constants */
+ #define SDL2_WINDOWPOS_CENTERED  0x2FFF0000
+@@ -55,6 +56,12 @@ bool SDL2_CreateSDLWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_Proper
+         return SDL_SetError("SDL2_CreateWindow not available");
+     }
+ 
++    /* SDL2 picks the EGL config while it creates the window, so hand it
++       the GL attributes the app has set by now. */
++    if (window->flags & SDL_WINDOW_OPENGL) {
++        SDL2_GLES_ApplyAttributes(_this);
++    }
++
+     data->sdl2_window = SDL2_CreateWindow(
+         window->title ? window->title : "",
+         x, y, window->w, window->h, sdl2_flags
+@@ -76,9 +83,12 @@ void SDL2_DestroySDLWindow(SDL_VideoDevice *_this, SDL_Window *window)
+ {
+     SDL_WindowData *data = window->internal;
+     if (data) {
+-        if (data->sdl2_gl_context && SDL2_GL_DeleteContext) {
+-            SDL2_GL_DeleteContext(data->sdl2_gl_context);
+-        }
++        /* Do not delete data->sdl2_gl_context here. In SDL3 a GL context
++           does not belong to the window it was created on: the app deletes
++           it with SDL_GL_DestroyContext and may keep using it with another
++           window (Taisei's probe window hit EGL_BAD_CONTEXT). Deleting it
++           here also deleted a second time every context the app had
++           already destroyed (Unreal 227 does so at exit). */
+         if (data->sdl2_window && SDL2_DestroyWindow) {
+             SDL2_DestroyWindow(data->sdl2_window);
+         }

@@ -1,0 +1,8 @@
+﻿[Public]
+Object=(Name=NOpenGLESDrv.NOpenGLESRenderDevice,Class=Class,MetaClass=Engine.RenderDevice)
+Preferences=(Caption="OpenGL ES 2",Parent="Rendering",Class=NOpenGLESDrv.NOpenGLESRenderDevice,Immediate=True,Category="Options")
+
+[NOpenGLESRenderDevice]
+ClassCaption="OpenGL ES 2"
+AskInstalled="Do you have an OpenGL ES 2.0 compatible GPU?"
+AskUse="Do you want Unreal to use the OpenGL ES 2.0 renderer?"

@@ -1,0 +1,5 @@
+[Public]
+Object=(Name=SteeleDawnPak.NaliFemalePlayer,Class=Class,MetaClass=UnrealShare.UnrealiPlayer,Description="Nali Female")
+Object=(Name=SteeleDawnPak.NaliFemaleBot,Class=Class,MetaClass=UnrealShare.Bots,Description="Nali Female")
+Object=(Name=SteeleDawnPak.SteeleDawnCoopGame,Class=Class,MetaClass=Engine.GameInfo)
+Preferences=(Caption="SteeleDawnCoopGame",Parent="Game Types",Class=SteeleDawnPak.SteeleDawnCoopGame)

@@ -1,0 +1,4 @@
+[Public]
+Object=(Name=UMapMod.UMapMod,Class=Class,MetaClass=Engine.Mutator,Description="UMapMod")
+Preferences=(Caption="Mutators",Parent="Advanced Options")
+Preferences=(Caption="UMapMod",Parent="Mutators",Class=UMapMod.UMapMod,Immediate=True)

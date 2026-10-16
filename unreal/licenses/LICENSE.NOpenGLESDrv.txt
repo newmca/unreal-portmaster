@@ -1,0 +1,31 @@
+NOpenGLESDrv source and binary provenance notice
+
+The NOpenGLESDrv renderer in this package (SystemARM64/NOpenGLESDrv.so,
+the renderer of this port) descends from:
+
+1. fgsfds' GLES2 renderer for Unreal Engine 1 (with contributions from
+   BSzili and Rinnegatamante), first commit
+   19fd7d23faad9ebbe140a5c2179d220ffa0b0740:
+   https://github.com/fgsfdsfgs/UE1
+2. Maxim Kaxd's ut99dc project:
+   https://github.com/maximqaxd/ut99dc
+3. Andiweli's UT99-Android fork at commit
+   85b1a9ada6ae28c422570d4603e57e4e4cef6eb1:
+   https://github.com/Andiweli/UT99-Android
+4. The PortMaster Unreal Tournament port's compatibility patch
+   (ports/ut99/source/NOpenGLESDrv469.patch), prepared by ToastedFrog.
+5. OldUnreal's public Unreal 227k_15 SDK:
+   https://github.com/OldUnreal/Unreal-testing/releases/tag/v227k_15
+
+The port to the Unreal 227 render-device interface, the SDL3 context
+handling and the in-renderer BC1/BC2/BC3 decoding were prepared for this
+PortMaster package. The exact changes are in source/ of
+https://github.com/newmca/unreal-portmaster.
+
+No standalone open-source license covering NOpenGLESDrv was found in the
+pinned UT99-Android/ut99dc source tree or in fgsfdsfgs/UE1. This notice does not grant additional
+rights or claim ownership of upstream code. Unreal, Unreal Engine, and related
+intellectual property belong to their respective owners.
+
+Confirm redistribution permission with the upstream authors and PortMaster
+reviewers before publishing this binary as an official PortMaster release.

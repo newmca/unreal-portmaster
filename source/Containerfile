@@ -1,0 +1,23 @@
+# Cross/native build environment for the Unreal Gold (227k_15) PortMaster port.
+# Ubuntu 22.04 matches OldUnreal's own 227k build baseline (glibc 2.35, GCC 12 libstdc++ ABI).
+FROM docker.io/library/ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture arm64 && \
+    sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list && \
+    printf '%s\n' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main universe' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe' \
+      > /etc/apt/sources.list.d/arm64.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential gcc-12 g++-12 gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu \
+      ninja-build make pkg-config git ca-certificates file python3 patchelf binutils-aarch64-linux-gnu \
+      libc6-dev:arm64 libstdc++-12-dev:arm64 libgles-dev:arm64 libegl-dev:arm64 libudev-dev:arm64 libasound2-dev:arm64 \
+      libgles-dev libegl-dev libudev-dev libasound2-dev libsdl2-dev libgl-dev \
+      qemu-user-static && \
+    update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-12 120 && \
+    update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-12 120 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 120 && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /work

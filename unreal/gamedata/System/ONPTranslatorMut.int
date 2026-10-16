@@ -1,0 +1,2 @@
+[Public]
+Object=(Name=ONPTranslatorMut.ONPTransHUDReplacer,Class=Class,MetaClass=Engine.Mutator,Description="ONP Translator, Replaces the HUD with an Oldskool HUD that has ONP's translator");

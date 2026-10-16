@@ -1,0 +1,10 @@
+[Public]
+Object=(Name=XidiaMPack.TvCoopServerListWindow,Class=Class,MetaClass=UTBrowser.UTBrowserServerListWindow)
+Object=(Name=XidiaMPack.XidiaPack,Class=Class,MetaClass=olroot.MapPack)
+Object=(Name=BlackSun.BlackSun,Class=Class,MetaClass=engine.music, Description="Xidia-BlackSun")
+Object=(Name=butterfly.butterfly,Class=Class,MetaClass=engine.music, Description="Xidia-Butterfly")
+Object=(Name=EndingXidia.Title,Class=Class,MetaClass=engine.music, Description="Xidia/RTNP-End Music")
+Object=(Name=Nemesis.Nemesis,Class=Class,MetaClass=engine.music, Description="Xidia-Nemesis")
+Object=(Name=crash99.crash99,Class=Class,MetaClass=engine.music, Description="Xidia-Gateways (Part ][)")
+Object=(Name=live.Live,Class=Class,MetaClass=engine.music, Description="Xidia-I live; Therefore I die")
+Object=(Name=Xdemac.Xdemac,Class=Class,MetaClass=engine.music, Description="Xidia-Demachre")

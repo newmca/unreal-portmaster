@@ -1,0 +1,8 @@
+[Public]
+Object=(Name=Xidia.Xidia,Class=Class,MetaClass=olroot.MapPack)
+Object=(Name=BlackSun.BlackSun,Class=Class,MetaClass=engine.music, Description="Xidia-BlackSun")
+Object=(Name=butterfly.butterfly,Class=Class,MetaClass=engine.music, Description="Xidia-Butterfly")
+Object=(Name=EndingXidia.Title,Class=Class,MetaClass=engine.music, Description="Xidia/RTNP-End Music")
+Object=(Name=Nemesis.Nemesis,Class=Class,MetaClass=engine.music, Description="Xidia-Nemesis")
+Object=(Name=Xdemac.Xdemac,Class=Class,MetaClass=engine.music, Description="Xidia-Demachre")
+
