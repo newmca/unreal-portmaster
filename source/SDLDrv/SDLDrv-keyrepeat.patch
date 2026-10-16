@@ -1,0 +1,110 @@
+Unreal Gold port: SDLDrv typed-key auto-repeat fix. Always on, in every mode.
+
+Applies to SDLDrv/ from OldUnreal-UnrealPatch227k-SDK-Linux.tar.bz2
+(v227k_15) with `patch -p1 -F0` run in the directory containing SDLDrv/,
+after SDLDrv-handheld.patch (as build.sh does) or on its own. No class
+layout changes: the new state lives in file statics.
+
+SDLDrv emulates key repeat for typed characters itself, because SDL text
+input is off. Stock UpdateInput set a 0.5 s delay on KEY_DOWN and, at the
+end of the same call, subtracted DeltaSeconds, the time since the previous
+UpdateInput. That time passed before the key went down. So whenever the
+frame before a key press took longer than 0.5 s (a level load, a save, a
+decode hitch, a slow renderer), a key that was only tapped was typed twice.
+On the handheld that doubles a digit typed into a mod keypad or a UWindow
+edit box.
+
+Now:
+- the repeat is timed in real time (appSeconds) from the UpdateInput that
+  saw the key go down: first repeat after 0.5 s, then every 0.1 s, as before.
+  A key pressed during a hitch thus gets its full 0.5 s once the game runs
+  again, as the player saw no feedback during the hitch;
+- the key must still be held according to SDL_GetKeyboardState, and only
+  the viewport that saw it go down repeats it. Stock repeated a key forever
+  when its KEY_UP went to another viewport's UpdateInput;
+- one UpdateInput sends at most one repeat; after a long frame the cadence
+  restarts instead of catching up.
+
+New SDL import: SDL_GetKeyboardState, which the official libSDL3 and the
+port's SDL3 shim both export.
+
+--- a/SDLDrv/Src/SDLViewport.cpp
++++ b/SDLDrv/Src/SDLViewport.cpp
+@@ -1528,6 +1528,17 @@
+ }
+ 
+ //
++// Typed-key auto-repeat state (see the end of UpdateInput): the viewport that saw
++// the key in its KeyRepeatKey go down, the key's scancode and the real time it went
++// down. File statics rather than USDLViewport members, so the class layout stays
++// that of the official SDLDrv.so. SDL has one keyboard and one event queue, drained
++// by whichever viewport's UpdateInput runs, so only one key auto-repeats at a time.
++//
++static USDLViewport* KeyRepeatViewport = NULL;
++static SDL_Scancode  KeyRepeatScancode = SDL_SCANCODE_UNKNOWN;
++static FTime         KeyRepeatDownTime;
++
++//
+ // Update input for this viewport.
+ //
+ #if UNREAL_OLDUNREAL || UNREAL_TOURNAMENT_OLDUNREAL
+@@ -1737,6 +1748,10 @@
+ 
+ 						// Initial delay before auto-repeat kicks in.
+ 						KeyRepeatTimer = 0.5f;
++						// ... counted in real time from now (see the auto-repeat at the end).
++						KeyRepeatViewport = this;
++						KeyRepeatScancode = Event.key.scancode;
++						KeyRepeatDownTime = appSeconds();
+ 
+ 						if (KeyRepeatKey != IK_None)
+ 							Client->Engine->Key(this, KeyRepeatKey
+@@ -2170,17 +2185,42 @@
+ 	}
+ 
+ 	// stijn: Auto-repeat the last typed key at a fixed rate
++	//
++	// Port fix: time the repeat in real time from the UpdateInput that saw the key go
++	// down. Stock code subtracted DeltaSeconds here, right after a KEY_DOWN in this
++	// same call had set the 0.5 s delay. DeltaSeconds, the time since the previous
++	// UpdateInput, passed before the key went down, so one frame longer than 0.5 s (a
++	// level load, a save, a texture decode hitch) repeated a key that was only tapped:
++	// a digit typed into a mod keypad or a UWindow edit box came out twice. Now:
++	// - KeyRepeatTimer is how long after KeyRepeatDownTime the next repeat is due:
++	//   0.5 s, then every 0.1 s, as before;
++	// - only the viewport that saw the latest typed key go down repeats it, and only
++	//   while SDL's keyboard state says the key is still held. Its KEY_UP may never
++	//   reach this viewport (another viewport's UpdateInput drained it, or
++	//   UseHIDKeyboard skipped it), and stock then repeated the key forever;
++	// - one call sends at most one repeat; after a long frame the 0.1 s cadence
++	//   restarts instead of catching up.
+ 	if (KeyRepeatKey != IK_None)
+ 	{
+-		KeyRepeatTimer -= DeltaSeconds;
+-		if (KeyRepeatTimer <= 0.f)
++		INT         NumKeys  = 0;
++		const bool* KeyState = SDL_GetKeyboardState(&NumKeys);
++		if (KeyRepeatViewport != this || !KeyState || (INT)KeyRepeatScancode >= NumKeys || !KeyState[KeyRepeatScancode])
++		{
++			KeyRepeatKey     = IK_None;
++			KeyRepeatUnicode = 0;
++		}
++		else
+ 		{
+-			KeyRepeatTimer = 0.1f; // Repeat rate once the initial delay has elapsed.
+-			Client->Engine->Key(this, KeyRepeatKey
++			const FLOAT HeldSeconds = appSeconds() - KeyRepeatDownTime;
++			if (HeldSeconds >= KeyRepeatTimer)
++			{
++				KeyRepeatTimer = HeldSeconds + 0.1f; // Repeat rate once the initial delay has elapsed.
++				Client->Engine->Key(this, KeyRepeatKey
+ #if !UNREAL_TOURNAMENT_OLDUNREAL
+-				, KeyRepeatUnicode
++					, KeyRepeatUnicode
+ #endif
+-			);
++				);
++			}
+ 		}
+ 	}
+ 

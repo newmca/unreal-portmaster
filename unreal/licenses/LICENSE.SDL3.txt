@@ -1,0 +1,41 @@
+SDL3 (SystemARM64/libSDL3.so.0)
+
+libSDL3.so.0 in this package is not the OldUnreal SDL3 build. It is built
+from bmdhacks' SDL3 fork with an SDL2 backend, which runs SDL3 programs on
+the firmware's own SDL2:
+
+  https://github.com/bmdhacks/SDL/tree/sdl2-backend
+  commit 6057d79baf8321bf190479a699655f06cc2a962f
+
+Altered source (zlib license, clause 2): three patches are applied on top
+of that commit. They are in source/sdl3shim/ of
+https://github.com/newmca/unreal-portmaster:
+
+  sdl3-sdl2-backend-fixes.patch
+      From PortMaster-New (ports/railroadrampage), commit
+      3fcdb796b828bfac8d62a40b24842b3215c60ab4. PortMaster-New is MIT
+      licensed, Copyright (c) 2021 christianhaitian.
+  sdl3-sdl2-backend-unrealgold-gl.patch
+  sdl3-sdl2-backend-unrealgold-winsize.patch
+      Written for this port.
+
+SDL and the fork are distributed under the zlib license:
+
+Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
+  
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+  
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required. 
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+

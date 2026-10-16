@@ -1,0 +1,4 @@
+[Public]
+Object=(Name=B227_MapFix.B227_MapFix,Class=Class,MetaClass=Engine.Mutator,Description="!ESSENTIAL SP MAP FIXES!")
+Preferences=(Caption="Mutators",Parent="Advanced Options")
+Preferences=(Caption="B227_MapFix",Parent="Mutators",Class=B227_MapFix.B227_MapFix,Immediate=True)

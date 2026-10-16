@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./Unreal.sh</path>
+    <name>Unreal</name>
+    <desc>Escape the crashed prison ship Vortex Rikers and fight the Skaarj across Na Pali, then return to the planet in the Return to Na Pali mission pack. Includes a selection of single-player campaigns made by the Unreal community.</desc>
+    <releasedate>20000121T000000</releasedate>
+    <developer>Epic MegaGames / Digital Extremes / Legend Entertainment</developer>
+    <publisher>Infogrames</publisher>
+    <genre>FPS</genre>
+    <image>./unreal/cover.jpg</image>
+  </game>
+</gameList>

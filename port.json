@@ -1,0 +1,36 @@
+{
+    "version": 4,
+    "name": "unreal.zip",
+    "items": [
+        "Unreal.sh",
+        "unreal"
+    ],
+    "items_opt": [],
+    "attr": {
+        "title": "Unreal Gold",
+        "porter": [
+            "ToastedFrog"
+        ],
+        "desc": "Unreal is Epic's 1998 first-person shooter; Unreal Gold adds the Return to Na Pali mission pack. This PortMaster package runs the OldUnreal 227k_15 Linux ARM64 update on the firmware's SDL2 with an OpenGL ES 2 renderer and the handheld controls of the Unreal Tournament '99 port, and adds a selection of single-player campaigns made by the Unreal community. The game itself is downloaded from OldUnreal on the first start.",
+        "desc_md": "Unreal is Epic's 1998 first-person shooter; Unreal Gold adds the *Return to Na Pali* mission pack. This PortMaster package runs the [OldUnreal 227k_15](https://github.com/OldUnreal/Unreal-testing/releases/tag/v227k_15) Linux ARM64 update on the firmware's SDL2 with an OpenGL ES 2 renderer and the handheld controls of the Unreal Tournament '99 port, and adds a selection of single-player campaigns made by the Unreal community. The game itself is downloaded from OldUnreal on the first start.",
+        "inst": "Ready to run. On the first start the port asks you to agree to the Epic Games Terms of Service, then downloads Unreal Gold and the OldUnreal 227k_15 patch (770 MiB) over Wi-Fi and installs them. This takes 5 to 15 minutes and needs about 1.3 GB of free space while it runs.",
+        "inst_md": "Ready to run. On the first start the port asks you to agree to the [Epic Games Terms of Service](https://legal.epicgames.com/en-US/epicgames/tos), then downloads Unreal Gold and the OldUnreal 227k_15 patch (770 MiB) over Wi-Fi and installs them, as [OldUnreal's installer](https://github.com/OldUnreal/FullGameInstallers) does. This takes 5 to 15 minutes and needs about 1.3 GB of free space while it runs. Without Wi-Fi, copy `UNREAL_GOLD.ISO` and `OldUnreal-UnrealPatch227k-Linux.tar.bz2` into `ports/unreal/` first.",
+        "genres": [
+            "action",
+            "fps"
+        ],
+        "image": null,
+        "rtr": true,
+        "exp": false,
+        "runtime": [],
+        "store": [],
+        "availability": "free",
+        "reqs": [
+            "analog_2"
+        ],
+        "arch": [
+            "aarch64"
+        ],
+        "min_glibc": "2.34"
+    }
+}

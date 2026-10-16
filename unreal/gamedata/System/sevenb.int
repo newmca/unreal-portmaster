@@ -1,0 +1,5 @@
+[Public]
+Object=(Name=SevenB.TvCoopServerListWindow,Class=Class,MetaClass=UTBrowser.UTBrowserServerListWindow)
+Object=(Name=SevenB.SevenBPack,Class=Class,MetaClass=olroot.MapPack)
+Object=(Name=SevenB.XidiaDM,Class=Class,MetaClass=Engine.Mutator,Description="Xidia Survivor Mode, Play Unreal Tournament with 7 Bullets Weapons")
+Object=(Name=SevenB.SevenCarRifle,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Combat Assault Rifle")

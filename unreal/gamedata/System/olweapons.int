@@ -1,0 +1,13 @@
+[public]
+Object=(Name=OLweapons.olautomag,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Automag")
+Object=(Name=OLweapons.oldpistol,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Dispersion Pistol")
+Object=(Name=olweapons.olstinger,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Stinger")
+Object=(Name=olweapons.olasmd,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="ASMD")
+Object=(Name=olweapons.oleightball,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Eightball")
+Object=(Name=olweapons.olflakcannon,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="OldSkool Flak Cannon")
+Object=(Name=olweapons.olrazorjack,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Razorjack")
+Object=(Name=olweapons.olgesbiorifle,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="OldSkool GES Bio Rifle")
+Object=(Name=olweapons.olrifle,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="OldSkool Sniper Rifle")
+Object=(Name=olweapons.olminigun,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="OldSkool Minigun")
+Object=(Name=olweapons.olsmmag,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="SMP 7243/8920")
+Object=(Name=olweapons.olquadshot,Class=Class,MetaClass=Botpack.TournamentWeapon,Description="Quadshot")

@@ -1,0 +1,339 @@
+Unreal Gold port: SDLDrv for a single-surface handheld (muOS, RG34XX-SP).
+
+Applies to SDLDrv/ from OldUnreal-UnrealPatch227k-SDK-Linux.tar.bz2
+(v227k_15) with `patch -p1 -F0` run in the directory containing SDLDrv/.
+No class layout changes: USDLClient and USDLViewport keep the size and
+field offsets of the official 227k_15 SDLDrv.so (checked by abi_check.cpp).
+
+Always on:
+- UpdateInput ignores SDL window events whose windowID is not the
+  viewport's window. Stock SDLDrv applied the launcher splash window's and
+  the renderers' hidden probe windows' size changes to the viewport.
+- SetMouseCapture logs when the stock path changes the capture state.
+
+Only when UNREALGOLD_HANDHELD is set to anything but "" or "0" (read once
+in USDLClient::Init into GSDLDrvHandheld):
+- Software menu cursor: bWindowsMouseAvailable stays 0 and the mouse stays
+  grabbed in relative mode, so UWindow draws its own cursor from
+  IK_MouseX/IK_MouseY. SetMouseCapture does nothing while that holds
+  (UGameEngine::Tick calls it every tick while a menu is open). The
+  UWindow cursor is centred whenever a menu opens.
+- Fullscreen only: the window is created fullscreen; no SetWindowSize,
+  SetWindowPosition, SetWindowFullscreenMode or RaiseWindow; EndFullscreen
+  (Alt+Enter, TOGGLEFULLSCREEN, ENDFULLSCREEN, failed SETRES) and
+  SetScreenMode Windowed/Borderless are logged no-ops; SETRES, TEMPSETRES
+  and the startup render device always ask for fullscreen.
+- RELAUNCH is swallowed (it would fork/exec a second game process onto the
+  single fbdev surface); the player is told to restart instead.
+
+Text input stays off (SDL_StartTextInput remains compiled out), so a
+digit key still types exactly one character.
+
+--- a/SDLDrv/Inc/SDLDrv.h
++++ b/SDLDrv/Inc/SDLDrv.h
+@@ -95,6 +95,17 @@
+ class USDLViewport;
+ class USDLClient;
+ 
++//
++// PortMaster handheld mode: a single fullscreen framebuffer surface and no OS
++// mouse cursor. Set once in USDLClient::Init when the environment variable
++// UNREALGOLD_HANDHELD is set to anything but "" or "0". When set, the viewport
++// is fullscreen-only, the mouse stays captured in relative mode while UWindow
++// draws its own cursor, and RELAUNCH is refused. A global instead of a class
++// member, so the USDLClient/USDLViewport layout stays identical to the official
++// SDLDrv.so that other modules are built against.
++//
++extern UBOOL GSDLDrvHandheld;
++
+ /*-----------------------------------------------------------------------------
+ 	USDLClient.
+ -----------------------------------------------------------------------------*/
+--- a/SDLDrv/Src/SDLClient.cpp
++++ b/SDLDrv/Src/SDLClient.cpp
+@@ -34,6 +34,8 @@
+ int           USDLClient::JoystickHats    = 0;
+ int           USDLClient::JoystickBalls   = 0;
+ 
++UBOOL GSDLDrvHandheld = 0;
++
+ //
+ // USDLClient constructor.
+ //
+@@ -186,6 +188,12 @@
+ 	// stijn: Make sure we capture the mouse as SDLDrv won't work well without it
+ 	CaptureMouse = true;
+ 
++	// PortMaster handheld mode (see SDLDrv.h). Read once, before any viewport exists.
++	const ANSICHAR* HandheldEnv = getenv("UNREALGOLD_HANDHELD");
++	GSDLDrvHandheld = HandheldEnv && *HandheldEnv && strcmp(HandheldEnv, "0") != 0;
++	if (GSDLDrvHandheld)
++		debugf(NAME_Init, TEXT("SDLDrv: Handheld mode (UNREALGOLD_HANDHELD=%ls): fullscreen only, software menu cursor, no RELAUNCH"), *appFromMultiByte(HandheldEnv));
++
+ 	// Note configuration.
+ 	PostEditChange();
+ 
+--- a/SDLDrv/Src/SDLViewport.cpp
++++ b/SDLDrv/Src/SDLViewport.cpp
+@@ -213,7 +213,9 @@
+ 	{
+ 		ActiveCursor = StandardCursors[0];
+ 		SDL_SetCursor(StandardCursors[0]);
+-		bWindowsMouseAvailable = 1;
++		// Handheld: nothing draws an OS cursor on the fbdev surface, so UWindow
++		// has to draw its own (see SetMouseCapture).
++		bWindowsMouseAvailable = !GSDLDrvHandheld;
+ 	}
+ 	debugf(NAME_Init, TEXT("SDLDrv: Created and initialized a new SDL viewport."));
+ 	unguard;
+@@ -566,6 +568,18 @@
+ 		Ar.Log(*ModeListString.LeftChop(1));
+ 		return 1;
+ 	}
++	// Handheld: RELAUNCH (UMenu after a video/audio device, console or language
++	// change) makes Core fork and exec a second game process, which would open a
++	// second window on the single fbdev surface. The changed setting has already
++	// been saved, so ask the player to restart instead. Checked before
++	// UViewport::Exec, which would pass the command on to the engine.
++	else if (GSDLDrvHandheld && ParseCommand(&Cmd, TEXT("RELAUNCH")))
++	{
++		debugf(NAME_Log, TEXT("SDLDrv: Handheld - ignoring RELAUNCH %ls"), Cmd);
++		if (Actor)
++			Actor->eventClientMessage(TEXT("Restart the game to apply this change."), NAME_None, 0);
++		return 1;
++	}
+ 	else if (UViewport::Exec(Cmd, Ar))
+ 	{
+ 		return 1;
+@@ -652,6 +666,13 @@
+ 		}
+ 		else if (appStricmp(Cmd, TEXT("Windowed")) == 0 || appStricmp(Cmd, TEXT("Borderless")) == 0)
+ 		{
++			// Handheld: fullscreen only. Also keep StartupFullscreen out of the ini.
++			if (GSDLDrvHandheld)
++			{
++				debugf(NAME_Init, TEXT("SDLDrv: Handheld - fullscreen only, ignoring SetScreenMode %ls"), Cmd);
++				return 1;
++			}
++
+ 			if (IsFullscreen())
+ 				EndFullscreen();
+ 
+@@ -680,6 +701,8 @@
+ 			Fullscreen = 0;
+ 		else if (appStrchr(Cmd, 'f') || appStrchr(Cmd, 'F'))
+ 			Fullscreen = 1;
++		if (GSDLDrvHandheld) // fullscreen only
++			Fullscreen = 1;
+ 		if (X && Y)
+ 		{
+ #if !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
+@@ -716,6 +739,8 @@
+ 			Fullscreen = 0;
+ 		else if (appStrchr(Cmd, 'f') || appStrchr(Cmd, 'F'))
+ 			Fullscreen = 1;
++		if (GSDLDrvHandheld) // fullscreen only
++			Fullscreen = 1;
+ 
+ 		USDLClient* Client = GetOuterUSDLClient();
+ 		INT         SavedX, SavedY;
+@@ -1055,8 +1080,9 @@
+ 		// permanently blocks the offscreen-framebuffer resize in Lock (OpenGL Lock: `if (!WasFullscreen ...)`),
+ 		// so a color-correction/AA offscreen FBO stayed at its creation size and every resize looked STRETCHED.
+ 		TryRenderDevice(ForcedRenDevClass, NewX, NewY, ColorBytes, GIsEditor ? 0 : C->StartupFullscreen);
++	// Handheld: always start fullscreen, whatever StartupFullscreen says.
+ 	if (!RenDev && !GIsEditor && !ParseParam(appCmdLine(), TEXT("nohard")))
+-		TryRenderDevice(TEXT("ini:Engine.Engine.GameRenderDevice"), NewX, NewY, ColorBytes, C->StartupFullscreen);
++		TryRenderDevice(TEXT("ini:Engine.Engine.GameRenderDevice"), NewX, NewY, ColorBytes, C->StartupFullscreen || GSDLDrvHandheld);
+ 	if (!RenDev && GIsEditor)
+ 		TryRenderDevice(TEXT("SoftDrv.SoftwareRenderDevice"), NewX, NewY, INDEX_NONE, 0);
+ 	if (!RenDev && GIsEditor)
+@@ -1116,11 +1142,66 @@
+ }
+ 
+ //
++// Handheld: centre UWindow's software cursor when a menu opens.
++// WindowConsole keeps the cursor in its MouseX/MouseY variables (GUI units, i.e.
++// pixels / Root.GUIScale) and only moves it by IK_MouseX/IK_MouseY deltas while
++// bWindowsMouseAvailable is 0. Without this, every menu would open with the
++// cursor wherever the previous one left it (the top-left corner the first time).
++// Called before each frame is drawn, so the first frame of a menu already has it.
++//
++static void CentreHandheldMenuMouse(USDLViewport* Viewport)
++{
++	static UBOOL MenuMouseCentred = 0; // the game has a single viewport
++
++	if (!Viewport->bShowWindowsMouse || !Viewport->Console)
++	{
++		MenuMouseCentred = 0;
++		return;
++	}
++	if (MenuMouseCentred)
++		return;
++
++	UObject*         Console  = Viewport->Console;
++	UFloatProperty*  MouseX   = FindField<UFloatProperty>(Console->GetClass(), TEXT("MouseX"));
++	UFloatProperty*  MouseY   = FindField<UFloatProperty>(Console->GetClass(), TEXT("MouseY"));
++	UObjectProperty* RootProp = FindField<UObjectProperty>(Console->GetClass(), TEXT("Root"));
++	if (!MouseX || !MouseY || !RootProp)
++	{
++		MenuMouseCentred = 1; // not a UWindow console
++		return;
++	}
++
++	// The root window (and with it GUIScale) is created by the first frame of
++	// the first menu; centre one frame later in that case.
++	UObject* Root = *(UObject**)((BYTE*)Console + RootProp->Offset);
++	if (!Root)
++		return;
++
++	UFloatProperty* ScaleProp = FindField<UFloatProperty>(Root->GetClass(), TEXT("GUIScale"));
++	FLOAT           GUIScale  = ScaleProp ? *(FLOAT*)((BYTE*)Root + ScaleProp->Offset) : 1.f;
++	if (GUIScale <= 0.f)
++		GUIScale = 1.f;
++
++	*(FLOAT*)((BYTE*)Console + MouseX->Offset) = Viewport->SizeX * 0.5f / GUIScale;
++	*(FLOAT*)((BYTE*)Console + MouseY->Offset) = Viewport->SizeY * 0.5f / GUIScale;
++	MenuMouseCentred                           = 1;
++
++	debugf(
++		NAME_Init,
++		TEXT("SDLDrv: Handheld - menu opened, centred the UWindow cursor at %.0f,%.0f (GUIScale %.2f)"),
++		Viewport->SizeX * 0.5f / GUIScale,
++		Viewport->SizeY * 0.5f / GUIScale,
++		GUIScale);
++}
++
++//
+ // Repaint the viewport.
+ //
+ void USDLViewport::Repaint(UBOOL Blit)
+ {
+ 	guard(USDLViewport::Repaint);
++	if (GSDLDrvHandheld)
++		CentreHandheldMenuMouse(this);
+ 	GetOuterUSDLClient()->Engine->Draw(this, Blit);
+ 	RepaintPending = FALSE;
+ 	unguard;
+@@ -1379,6 +1460,25 @@
+ {
+ 	guard(USDLViewport::SetMouseCapture);
+ 
++	// Handheld: there is no OS cursor on the fbdev surface, so do not release the
++	// mouse for menus. Keep it captured in relative mode and let UWindow draw its
++	// own cursor from the IK_MouseX/IK_MouseY deltas. UGameEngine::Tick calls
++	// SetMouseCapture(0,0) on every tick while a menu is open, so this must not
++	// touch SDL unless the capture was actually lost.
++	if (GSDLDrvHandheld)
++	{
++		bWindowsMouseAvailable = 0;
++		if (!MouseIsGrabbed || !InRelativeMouseMode)
++		{
++			debugf(NAME_Init, TEXT("SDLDrv: Handheld - capturing the mouse in relative mode (software menu cursor)"));
++			UpdateMouseGrabState(1);
++		}
++		return;
++	}
++
++	if (!Capture != !MouseIsGrabbed)
++		debugf(NAME_Init, TEXT("SDLDrv: SetMouseCapture - Capture %d"), Capture ? 1 : 0);
++
+ //#if UNREAL_OLDUNREAL
+ 	bWindowsMouseAvailable = !Capture;
+ //#endif
+@@ -1520,6 +1620,13 @@
+ 	SDL_Event Event;
+ 	while (SDL_PollEvent(&Event))
+ 	{
++		// Window events belong to the window they name. Without this check, the
++		// launcher's splash window and the renderers' hidden probe windows had
++		// their size changes applied to this viewport as resize notifications.
++		if (Event.type >= SDL_EVENT_WINDOW_FIRST && Event.type <= SDL_EVENT_WINDOW_LAST &&
++			(!Window || Event.window.windowID != SDL_GetWindowID(Window)))
++			continue;
++
+ 		switch (Event.type)
+ 		{
+ 			case SDL_EVENT_QUIT:
+@@ -2329,6 +2436,16 @@
+ {
+ 	guard(USDLViewport::EndFullscreen);
+ 	USDLClient* Client = GetOuterUSDLClient();
++
++	// Handheld: there is no windowed mode on the single fbdev surface. This covers
++	// Alt+Enter and TOGGLEFULLSCREEN (via ToggleFullscreen), ENDFULLSCREEN and a
++	// failed SETRES.
++	if (GSDLDrvHandheld)
++	{
++		debugf(NAME_Init, TEXT("SDLDrv: Handheld - fullscreen only, not ending fullscreen mode."));
++		return;
++	}
++
+ 	debugf(NAME_Init, TEXT("SDLDrv: Ending fullscreen mode by request."));
+ 
+ 	if (RenDev && (BlitFlags & (BLIT_Direct3D | BLIT_OpenGL | BLIT_Metal | BLIT_Vulkan)))
+@@ -2656,6 +2773,12 @@
+ 	//	if (!Window && RequestFullscreen)
+ 	//		VideoFlags |= SDL_WINDOW_FULLSCREEN;
+ 
++	// Handheld: the single fbdev surface is always fullscreen at the panel's fixed
++	// mode, so create the window fullscreen right away. Resizing, centring,
++	// mode-switching and raising it (all skipped below) would only churn the backend.
++	if (!Window && GSDLDrvHandheld)
++		VideoFlags |= SDL_WINDOW_FULLSCREEN;
++
+ 	if (!Window)
+ 	{
+ 		debugf(NAME_Init, TEXT("SDLDrv: Creating Window"));
+@@ -2706,12 +2829,16 @@
+ 		// Wait for the window to open - do we need this call?
+ 		if (!SDL_SyncWindow(Window))
+ 			debugf(TEXT("SDLDrv: SyncWindow failed: %ls"), *appFromMultiByte(SDL_GetError()));
++
++		// Handheld: already fullscreen, so SetFullscreen below has nothing to do.
++		if (GSDLDrvHandheld)
++			IsFullscreen = (SDL_GetWindowFlags(Window) & SDL_WINDOW_FULLSCREEN) ? 1 : 0;
+ 	}
+ 
+ 	if (!NoWindowChange && IsNewWindow && Client->PreferredDisplayID != -1)
+ 		MoveWindowToDisplay(Client->PreferredDisplayID);
+ 
+-	if (ShouldResizeWindow)
++	if (ShouldResizeWindow && !GSDLDrvHandheld) // handheld: see VideoFlags above
+ 	{
+ 		// A brand-new GAME window opens at the user's configured windowed resolution, ignoring the
+ 		// requested size. An EMBEDDED editor viewport must NOT: its window IS the host widget's own
+@@ -2737,7 +2864,7 @@
+ 	// postprocess pass. With UseVirtualModeSwitching=false we change the
+ 	// actual display mode so SizeX==PhysicalSizeX and the hardware scales
+ 	// for us (much cheaper on a Pi).
+-	if (!NoWindowChange && RequestFullscreen)
++	if (!NoWindowChange && RequestFullscreen && !GSDLDrvHandheld) // handheld: fixed mode
+ 	{
+ 		SDL_DisplayMode  BestMode;
+ 		SDL_DisplayMode* TargetMode = NULL;
+@@ -2796,7 +2923,7 @@
+ 	if (!NoWindowChange && RequestFullscreen)
+ 		SDL_SyncWindow(Window);
+ 
+-	if (ShouldRaiseWindow)
++	if (ShouldRaiseWindow && !GSDLDrvHandheld) // handheld: nothing to raise above
+ 		SDL_RaiseWindow(Window);
+ 
+ 	// Query the new fullscreen status
+@@ -2874,6 +3001,15 @@
+ 	// Update the window.
+ 	UpdateWindowFrame();
+ 
++	// Handheld: no hardware cursor and no mode switch, so skip the relative mode
++	// off/on quirk below; keep the mouse captured for UWindow's software cursor.
++	if (GSDLDrvHandheld)
++	{
++		bWindowsMouseAvailable = 0;
++		UpdateMouseGrabState(1);
++		return 1;
++	}
++
+ //#if UNREAL_OLDUNREAL
+ 	bWindowsMouseAvailable = !IsFullscreen;
+ //#endif

@@ -1,0 +1,33 @@
+# Single-player campaigns the port ships, read by select_campaigns.py.
+#
+# One New Game menu entry per line, spelled exactly as the menu shows it (the
+# last ";" field of its MetaClass=UnrealShare.SinglePlayer line in a System
+# .int file). Every other campaign entry is taken out of the menu, and the
+# maps, packages, music, sounds and textures that only those campaigns use are
+# not shipped. The stock Unreal Gold files are always shipped.
+#
+# A line "map NAME" also ships map NAME (and what it needs), for a level that
+# a kept campaign reaches only through UnrealScript and not through a map URL.
+# A line "package NAME" ships a package that no map needs, such as a player
+# model a campaign's readme recommends.
+
+# Stock (UnrealShare.int, UPak.int)
+Unreal
+Return to Na Pali
+
+# Mods (from the Ultimate Collection of Unreal Add-Ons)
+# Shoutout to Chris S. Madisun for making these work in Unreal
+Unreal: Return to Na Pali (Ultimate)
+Unreal: Steele Dawn
+Attacked
+Hard Crash
+One Day (in the Life of...)
+[UT mod via OldSkool] Operation: Na Pali
+[UT mod via OldSkool] Project Zephon: Battle for Freedom
+The Fifth Vortex - Ehactora's Story
+The Illhaven Saga
+Unreal Forgotten
+[UT mod via OldSkool] Xidia: The Incident
+[UT mod via OldSkool] Xidia: The Escape
+[UT mod via OldSkool] Xidia - Na Pali Haven (Redux)
+[UT mod via OldSkool] Xidia - Seven Bullets

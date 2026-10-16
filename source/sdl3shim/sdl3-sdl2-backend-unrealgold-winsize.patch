@@ -1,0 +1,66 @@
+Unreal Gold port: report SDL2's real window size to SDL3.
+
+Applies to bmdhacks/SDL@6057d79baf8321bf190479a699655f06cc2a962f after
+sdl3-sdl2-backend-fixes.patch and sdl3-sdl2-backend-unrealgold-gl.patch.
+Touches only src/video/sdl2/SDL_sdl2window.c.
+
+SDL2's mali-fbdev driver (muOS, RG34XX-SP, blitter disabled) makes every
+window the size of the screen (720x480) whatever size was asked for. The
+shim told SDL3 the requested size instead: at creation (227 creates its
+window at 100x100) and in SDL_SetWindowSize (it then asks for its windowed
+resolution, e.g. 640x480). Until SDL2's own resize event was pumped,
+SDL_GetWindowSize disagreed with SDL_GetWindowSizeInPixels and the EGL
+surface, and 227 derives its mouse scale from SDL_GetWindowSize. The same
+applied to SDL_SetWindowSize on a fullscreen window on any SDL2 driver.
+
+SDL2_SendSDL2WindowSize() reads the size back from SDL2 and sends that as
+SDL_EVENT_WINDOW_RESIZED, after window creation and after SetWindowSize.
+On drivers that honour the request (X11) nothing changes. The fullscreen
+flag is not faked: SDL3's fullscreen state stays whatever the app asked
+for, and SDL3 already reports the desktop mode size (720x480) on entry.
+
+diff --git a/src/video/sdl2/SDL_sdl2window.c b/src/video/sdl2/SDL_sdl2window.c
+index a1eebab..23ad069 100644
+--- a/src/video/sdl2/SDL_sdl2window.c
++++ b/src/video/sdl2/SDL_sdl2window.c
+@@ -14,6 +14,22 @@
+ /* SDL2 window position constants */
+ #define SDL2_WINDOWPOS_CENTERED  0x2FFF0000
+ 
++/* Tell SDL3 the size SDL2 really gave the window. SDL2 does not always
++ * honour the requested size: mali-fbdev without its blitter (muOS on the
++ * RG34XX-SP) keeps every window at the size of the screen, and a
++ * fullscreen SDL2 window keeps its fullscreen size. Reporting the
++ * requested size instead left SDL_GetWindowSize disagreeing with
++ * SDL_GetWindowSizeInPixels (SDL2's drawable) and with the GL surface
++ * until SDL2's own resize event was pumped, if it ever came. */
++static void SDL2_SendSDL2WindowSize(SDL_Window *window, int w, int h)
++{
++    SDL_WindowData *data = window->internal;
++    if (data && data->sdl2_window && SDL2_GetWindowSize) {
++        SDL2_GetWindowSize(data->sdl2_window, &w, &h);
++    }
++    SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, w, h);
++}
++
+ bool SDL2_CreateSDLWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_PropertiesID create_props)
+ {
+     SDL_WindowData *data = (SDL_WindowData *)SDL_calloc(1, sizeof(SDL_WindowData));
+@@ -76,6 +92,8 @@ bool SDL2_CreateSDLWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_Proper
+ 
+     data->sdl2_window_id = SDL2_GetWindowID ? SDL2_GetWindowID(data->sdl2_window) : 0;
+ 
++    SDL2_SendSDL2WindowSize(window, window->w, window->h);
++
+     return true;
+ }
+ 
+@@ -119,7 +137,7 @@ void SDL2_SetSDLWindowSize(SDL_VideoDevice *_this, SDL_Window *window)
+     SDL_WindowData *data = window->internal;
+     if (data && data->sdl2_window && SDL2_SetWindowSize) {
+         SDL2_SetWindowSize(data->sdl2_window, window->pending.w, window->pending.h);
+-        SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, window->pending.w, window->pending.h);
++        SDL2_SendSDL2WindowSize(window, window->pending.w, window->pending.h);
+     }
+ }
+ 
