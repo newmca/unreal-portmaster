@@ -24,8 +24,7 @@ CONFDIR="$GAMEDIR/conf"
 cd "$GAMEDIR"
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
 
-# The Unreal Gold files are downloaded from OldUnreal on the first start.
-# install.bash writes gamedata/.installed when it is done.
+# install.bash fetches Unreal Gold on the first start and writes gamedata/.installed.
 if [ ! -f "$DATADIR/.installed" ]; then
   export SEVENZIP="$controlfolder/7zzs.${DEVICE_ARCH}"
   export PATCHER_FILE="$GAMEDIR/install/install.bash"
@@ -36,8 +35,7 @@ if [ ! -f "$DATADIR/.installed" ]; then
     $ESUDO chmod a+x "$PATCHER_FILE"
     source "$controlfolder/utils/patcher.txt"
   else
-    pm_message "This port requires the latest PortMaster to run, please go to https://portmaster.games/ for more info."
-    sleep 5
+    pm_show_error "This port requires the latest PortMaster to run, please go to https://portmaster.games/ for more info." --title "PortMaster update needed"
     exit 1
   fi
   [ -f "$DATADIR/.installed" ] || exit 1
@@ -69,14 +67,17 @@ export LD_LIBRARY_PATH="$RUNDIR:$LD_LIBRARY_PATH"
 export GCONV_PATH="$GAMEDIR/gconv"
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
 
-# 227 is SDL3-only. SystemARM64/libSDL3.so.0 is the sdl3-sdl2-backend shim,
-# which runs on the firmware's SDL2. SDL3 would read SDL_VIDEODRIVER too, so
-# the firmware's choice goes to the shim's SDL2 instead.
-if [ -n "$SDL_VIDEODRIVER" ] && [ "$SDL_VIDEODRIVER" != "sdl2" ]; then
+# 227 is SDL3-only; SystemARM64/libSDL3.so.0 is the shim that runs it on the firmware's SDL2.
+GAME_SDL_VIDEODRIVER=""
+if [ -n "$SDL_VIDEODRIVER" ]; then
   export SDL3SHIM_SDL2_VIDEODRIVER="$SDL_VIDEODRIVER"
+  GAME_SDL_VIDEODRIVER=sdl2
 fi
-unset SDL_VIDEODRIVER
-export SDL_VIDEO_DRIVER=sdl2
+GAME_SDL_AUDIODRIVER=""
+if [ -n "$SDL_AUDIODRIVER" ]; then
+  export SDL3SHIM_SDL2_AUDIODRIVER="$SDL_AUDIODRIVER"
+  GAME_SDL_AUDIODRIVER=sdl2
+fi
 export SDL3SHIM_ENABLE_MOUSE=1
 # Fullscreen-only viewport and software menu cursor in the port's SDLDrv.so.
 export UNREALGOLD_HANDHELD=1
@@ -91,12 +92,11 @@ fi
 chmod +x "$RUNDIR/unreal-bin-arm64"
 cd "$RUNDIR"
 
-# The kernel truncates process names to 15 characters, and gptokeyb2 quits
-# the game by that name. Its output (a line per right-stick sample) is dropped.
+# The kill switch matches the process name, which the kernel cuts to 15 characters.
 $GPTOKEYB2 "unreal-bin-arm6" -c "$GAMEDIR/unreal.ini" > /dev/null 2>&1 &
 pm_platform_helper "$RUNDIR/unreal-bin-arm64" > /dev/null
 
 # -log skips the launcher splash, a second window the fbdev display can't show.
-./unreal-bin-arm64 -log
+SDL_VIDEODRIVER="$GAME_SDL_VIDEODRIVER" SDL_AUDIODRIVER="$GAME_SDL_AUDIODRIVER" ./unreal-bin-arm64 -log
 
 pm_finish

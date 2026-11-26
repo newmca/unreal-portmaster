@@ -113,8 +113,12 @@ Both libraries have these properties:
 - The engine binaries' `RUNPATH $ORIGIN` finds it there.
 
 **Launcher environment**
-- `SDL_VIDEO_DRIVER=sdl2`: this is SDL3's variable. Never export
-  `SDL_VIDEODRIVER`, which the inner SDL2 also reads.
+- The shim is built with one video and one audio driver, both named `sdl2`.
+  When the firmware sets `SDL_VIDEODRIVER` or `SDL_AUDIODRIVER`, the launcher
+  copies the value into `SDL3SHIM_SDL2_VIDEODRIVER` or
+  `SDL3SHIM_SDL2_AUDIODRIVER` (which the shim hands to the inner SDL2) and
+  passes `sdl2` to SDL3 on the game's command line only, so gptokeyb2 keeps
+  the firmware's values.
 - `SDL3SHIM_ENABLE_MOUSE=1`: without it, `SDL_SetWindowRelativeMouseMode`
   fails. SDLDrv then logs `Assertion failed` and mouselook stops at the
   screen edges.
@@ -122,9 +126,8 @@ Both libraries have these properties:
   so the scale would be applied twice.
 - Start the game with `-log` so SDLLaunch skips its splash window.
   mali-fbdev supports only one window.
-- `SDL3SHIM_SDL2_VIDEODRIVER` (optional) is copied into SDL2's
-  `SDL_VIDEODRIVER`. `SDL3SHIM_SDL2_LIB` (optional) names the SDL2 library;
-  the default is `libSDL2-2.0.so.0`.
+- `SDL3SHIM_SDL2_LIB` (optional) names the SDL2 library; the default is
+  `libSDL2-2.0.so.0`.
 
 **Limits that remain**
 - `SDL_GL_LoadLibrary` ignores its path. A second call with a path fails with
