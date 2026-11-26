@@ -14,13 +14,10 @@ The New Game list also holds these community campaigns, which ship with the port
 - **Hard Crash**: Silver Serpent (Xer06siX).
 - **One Day in the Life of...**: Chris Burgess.
 - **Operation: Na Pali** (and its tutorial): Team Vortex, led by David "DavidM" Münnich, with levels by James "eVOLVE" Hamer-Morton, Arjan "Atje" Vroegop, Hyperion, Heiko "sm0k3r" Dreyer, Sjoerd "Hourences" De Jong, Paul "Tonnberry" Fahss, Silver Serpent, Jannis "DrPest" Borgers, Daniel "MClane" Pflugbeil, El Chicoverde, Tim "Kew" Jervis, Florian "Strogg" Oswald and Juan Pancho Eekels, and code by UsAaR33.
-- **Project Zephon: Battle for Freedom**: Derdak2rot, with Tobby "Carthage" Ong, WhirlWindWabbit, Kimmo "Cardi" Kontto, L.J. Paranoid, milb and NR.2000.
 - **The Fifth Vortex - Ehactora's Story**: Rob "Doublez-Down" Collins and Teridax, with Eenocks, Nivlek, Shane Caudle and Jeremy War.
 - **The Illhaven Saga**: Tim "Kew" Jervis.
-- **Unreal Forgotten**: Andrew "Sinistral" Allison.
 - **Xidia: The Incident** and **Xidia: The Escape**: Will "Mr.Prophet" Drekker, with Sjoerd "Hourences" De Jong.
 - **Xidia - Na Pali Haven (Redux)**: Mr.Prophet, remixing Jeremy War's original.
-- **Xidia - Seven Bullets**: Team Red Nemesis: Mr.Prophet, Myscha, Darth Weasel, Juan Pancho Eekels, Waffnuffly and Eightball Maniac.
 
 The campaigns run on code by UsAaR33 (OldSkool Amp'd), Masterkent (Botpack227, UMapMod), Mychaeel (ONPSPFix), Hugh Macdonald, Yoda and Stephen "Nemesis" Deaver (Unreal Movie System), Beppo (InfAdds), Asgard (u2rtnp) and Krull (EntryII, the level behind the menus).
 
@@ -39,7 +36,6 @@ Every button sends a key, as in the Unreal Tournament '99 port. The digits stay 
 | A | 8 | Jump |
 | B | 7 | Crouch |
 | X | 5 | Use the selected inventory item |
-| Y | 6 | Reload the Automag or CAR (Seven Bullets) |
 | D-pad up | 1 | Quick save |
 | D-pad down | 3 | Quick load |
 | D-pad left / right | 2 / 4 | Previous / next inventory item |
